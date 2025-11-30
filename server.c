@@ -1,3 +1,6 @@
+#include "rbuf.h"
+
+#include <stddef.h>
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +19,11 @@
 
 typedef char byte;
 typedef unsigned char ubyte;
+
+typedef struct {
+	uint16_t numbytes;
+	uint8_t type;
+} phead;
 
 void intHandler()
 {
@@ -65,34 +73,39 @@ void handleConn(int efd, int sfd, struct sockaddr_in *addr,
 	}
 }
 
-void handleMessage(struct epoll_event *ev)
+void handleMessage(int fd, struct rbuf *buf)
 {
-	ubyte buf[300];
-	ubyte *input_ptr = buf;
+	printf("size from handle message %ld\n", sizeof(buf->mem));
 	while (TRUE) {
-		ssize_t bytes_read = read(ev->data.fd, buf, sizeof(buf) - 1);
-		if (bytes_read == -1) {
+		ssize_t bytes = read(fd, &buf->mem[buf->head], 20);
+		if (bytes == -1) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				break;
 			} else {
 				perror("Error reading");
-				close(ev->data.fd);
+				close(fd);
 				break;
 			}
-		} else if (bytes_read == 0) {
+		} else if (bytes == 0) {
 			printf("Client disconnected.\n");
-			close(ev->data.fd);
+			close(fd);
 			break;
 		} else {
-			buf[bytes_read] = '\0';
-			printf("%ld bytes from fd: %d\n%s\n", bytes_read,
-			       ev->data.fd, buf);
+			size_t tmp = buf->head;
+
+			buf->head += bytes;
+			buf->mem[buf->head++] = '\0';
+			printf("%ld bytes from fd: %d\n%s\nhead %lu, tmp %lu\n",
+			       bytes, fd, &buf->mem[tmp], buf->head, tmp);
 		}
 	}
 }
 
 void startPolling(int server_fd, struct sockaddr_in *addr)
 {
+	struct rbuf buf = { .mem = { 0 } };
+	buf.head = buf.tail = 0;
+	printf("buff size %lu, location %p\n", sizeof(buf.mem), buf.mem);
 	struct epoll_event conn_ev, conn_evs[100];
 	int nfds, epollfd, n;
 	socklen_t addrlen = sizeof(*addr);
@@ -118,12 +131,11 @@ void startPolling(int server_fd, struct sockaddr_in *addr)
 		}
 
 		for (n = 0; n < nfds; n++) {
-			printf("Got new fd: %u\n", conn_evs[n].data.fd);
 			if (conn_evs[n].data.fd == server_fd) {
 				handleConn(epollfd, server_fd, addr,
 					   &conn_evs[n]);
 			} else {
-				handleMessage(&conn_evs[n]);
+				readfd_nbl(&buf, conn_evs[n].data.fd, 50);
 			}
 		}
 	}
