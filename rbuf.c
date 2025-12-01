@@ -27,6 +27,16 @@ void inchd(struct rbuf *buf, uint16_t count)
 	buf->count += count;
 }
 
+void findhelloworld(struct rbuf *buf, size_t start, size_t bytes)
+{
+	char str[bytes + 1];
+	str[bytes] = '\0';
+	memcpy(str, &buf->mem[start], bytes);
+	fprintf(stderr, "parsed string: %s\n", str);
+	//printf("%ld bytes\n%s\nhead %lu, capac %lu, tmp: %lu\n",
+	//      bytes, str, buf->head, capac(buf), start);
+}
+
 size_t readhd(struct rbuf *buf, int fd)
 {
 	size_t sz = sizeof(packethd);
