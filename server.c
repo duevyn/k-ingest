@@ -1,4 +1,5 @@
 #include "rbuf.h"
+#include "mempool.h"
 
 #include <stddef.h>
 #include <arpa/inet.h>
@@ -16,14 +17,8 @@
 #define TRUE 1
 #define MAX_CONNECTIONS 50
 #define PORT 1100
-
 typedef char byte;
 typedef unsigned char ubyte;
-
-typedef struct {
-	uint16_t numbytes;
-	uint8_t type;
-} phead;
 
 void intHandler()
 {
@@ -53,76 +48,53 @@ void printSocketPort(int sock, struct sockaddr_in *addr)
 	printf("socket fd (%d) listening on %d:%d\n", sock, ip, PORT);
 }
 
-void handleConn(int efd, int sfd, struct sockaddr_in *addr,
-		struct epoll_event *ev)
+void handleConn(int efd, int sfd, struct epoll_event *ev)
 {
 	int conn_fd;
-	socklen_t addrlen = sizeof(*addr);
 
 	if ((conn_fd = accept(sfd, NULL, NULL)) == -1) {
 		perror("accept");
 		exit(EXIT_FAILURE);
 	}
-	printf("Adding a new connection: %d\n\n", conn_fd);
-	setNonBlocking(conn_fd);
+
+	struct context *cx = cxtinit(conn_fd);
+
+	printf("Adding a new connection: %d\nspace in buf: %p\n", conn_fd,
+	       cx->buf);
+	setNonBlocking(cx->fd);
 	ev->events = EPOLLIN | EPOLLET;
-	ev->data.fd = conn_fd;
-	if (epoll_ctl(efd, EPOLL_CTL_ADD, conn_fd, ev) == -1) {
+	ev->data.ptr = cx;
+	if (epoll_ctl(efd, EPOLL_CTL_ADD, cx->fd, ev) == -1) {
 		perror("epoll_ctl: conn_sock");
 		exit(EXIT_FAILURE);
 	}
 }
 
-void handleMessage(int fd, struct rbuf *buf)
-{
-	printf("size from handle message %ld\n", sizeof(buf->mem));
-	while (TRUE) {
-		ssize_t bytes = read(fd, &buf->mem[buf->head], 20);
-		if (bytes == -1) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				break;
-			} else {
-				perror("Error reading");
-				close(fd);
-				break;
-			}
-		} else if (bytes == 0) {
-			printf("Client disconnected.\n");
-			close(fd);
-			break;
-		} else {
-			size_t tmp = buf->head;
-
-			buf->head += bytes;
-			buf->mem[buf->head++] = '\0';
-			printf("%ld bytes from fd: %d\n%s\nhead %lu, tmp %lu\n",
-			       bytes, fd, &buf->mem[tmp], buf->head, tmp);
-		}
-	}
-}
-
-void startPolling(int server_fd, struct sockaddr_in *addr)
+void startPolling(int server_fd)
 {
 	struct rbuf buf = { .mem = { 0 } };
+	struct mempool *mp = mempoolinit();
 	buf.head = buf.tail = 0;
 	printf("buff size %lu, location %p\n", sizeof(buf.mem), buf.mem);
 	struct epoll_event conn_ev, conn_evs[100];
 	int nfds, epollfd, n;
-	socklen_t addrlen = sizeof(*addr);
 
 	if ((epollfd = epoll_create1(0)) == -1) {
 		perror("epoll_create1");
 		exit(EXIT_FAILURE);
 	}
 
+	struct context cxt = { .fd = server_fd };
+
 	conn_ev.events = EPOLLIN;
-	conn_ev.data.fd = server_fd;
+	conn_ev.data.ptr = &cxt;
 	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, server_fd, &conn_ev) == -1) {
 		perror("epoll_ctl: listen_sock (server_fd)");
 		exit(EXIT_FAILURE);
 	}
 
 	for (;;) {
+		//fprintf(stderr, "Do we even start loop\n");
 		signal(SIGINT, intHandler);
 		nfds = epoll_wait(epollfd, conn_evs, MAX_CONNECTIONS, -1);
 		if (nfds == -1) {
@@ -131,14 +103,26 @@ void startPolling(int server_fd, struct sockaddr_in *addr)
 		}
 
 		for (n = 0; n < nfds; n++) {
-			if (conn_evs[n].data.fd == server_fd) {
-				handleConn(epollfd, server_fd, addr,
-					   &conn_evs[n]);
+			//int nfd = ((struct context *)conn_evs[n].data.ptr)->fd;
+			//	fprintf(stderr,
+			//		"We in the event loop: n: %d, server_fd %d\n",
+			//		n, server_fd);
+			struct context *cx = conn_evs[n].data.ptr;
+			//int nfd = ((struct context *)conn_evs[n].data.ptr)->fd;
+			if (cx->fd == server_fd) {
+				//	fprintf(stderr,
+				//		"startPolling right before handleConn -> cx->buf: %p\n",
+				//		cx->buf);
+				handleConn(epollfd, server_fd, &conn_evs[n]);
 			} else {
-				readfd_nbl(&buf, conn_evs[n].data.fd, 50);
+				//	fprintf(stderr,
+				//		"startPolling about to rreadfd_nbl\n");
+				//readfd_nbl(&buf, cx->fd, 50);
+				hndlev(mp, &buf, cx);
 			}
 		}
 	}
+	mpdestroy(mp);
 }
 
 void recvSync(int *fd_socket)
@@ -219,6 +203,6 @@ int main(void)
 		exit(EXIT_FAILURE);
 	}
 
-	startPolling(sockfd, &addr);
+	startPolling(sockfd);
 	exit(EXIT_SUCCESS);
 }

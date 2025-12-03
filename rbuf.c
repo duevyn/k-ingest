@@ -1,5 +1,4 @@
 #include "rbuf.h"
-#include "packet.h"
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
@@ -27,27 +26,33 @@ void inchd(struct rbuf *buf, uint16_t count)
 	buf->count += count;
 }
 
-void findhelloworld(struct rbuf *buf, size_t start, size_t bytes)
+void memcpyrbuf(struct rbuf *buf, uint8_t *src, uint16_t cnt)
 {
-	char str[bytes + 1];
-	str[bytes] = '\0';
-	memcpy(str, &buf->mem[start], bytes);
-	fprintf(stderr, "parsed string: %s\n", str);
-	//printf("%ld bytes\n%s\nhead %lu, capac %lu, tmp: %lu\n",
-	//      bytes, str, buf->head, capac(buf), start);
+	memcpy(buf->mem + buf->head, src, cnt);
+	buf->head += cnt;
+	buf->count += cnt;
+}
+
+void readrbuf(struct rbuf *buf, uint8_t *src, uint16_t cnt)
+{
+	buf->tail += cnt;
+	buf->count -= cnt;
 }
 
 size_t readhd(struct rbuf *buf, int fd)
 {
-	size_t sz = sizeof(packethd);
+	size_t sz = 8;
+	//size_t sz = sizeof(packethd);
 	ssize_t bytes = read(fd, &buf->mem[buf->head], sz);
 	if (bytes != sz) {
 		perror("ERROR: Incorrect format\n");
 		// TODO: is it my job to close the socket?
 		close(fd);
+		exit(EXIT_FAILURE);
 	}
 
 	inchd(buf, sz);
+	/*
 	struct packethd hd;
 	memcpy(&hd, &buf->mem[(buf->head) - sz], sz);
 	if (hd.magic != MAGIC) {
@@ -62,18 +67,21 @@ size_t readhd(struct rbuf *buf, int fd)
 		hd.magic, hd.type, hd.databytes);
 	fprintf(stderr, "==============================================\n");
 	return hd.databytes;
+        */
+	return 13;
 }
 
 void readfd_nbl(struct rbuf *buf, int fd, uint16_t count)
 {
 	ssize_t datalen = readhd(buf, fd);
-	if (datalen != sizeof(packethd)) {
+	//if (datalen != sizeof(packethd)) {
+	if (datalen != 8) {
 		//handle error
 	}
-	while (1) {
-		fprintf(stderr, "reading %lu bytes from from %x (%lu)\n",
-			datalen, buf->mem[buf->head], buf->head);
-		ssize_t bytes = read(fd, &buf->mem[buf->head], datalen);
+	for (;;) {
+		fprintf(stderr, "reading %lu bytes to %p\n", datalen, buf);
+		ssize_t bytes = read(fd, &buf[8], datalen);
+		//ssize_t bytes = read(fd, &buf->mem[buf->head], datalen);
 		if (bytes == -1) {
 			fprintf(stderr, "EAGAIN\n");
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -89,6 +97,7 @@ void readfd_nbl(struct rbuf *buf, int fd, uint16_t count)
 			break;
 		} else {
 			size_t tmp = buf->head;
+
 			inchd(buf, bytes);
 			buf->mem[buf->head] = '\0';
 			inchd(buf, 1);

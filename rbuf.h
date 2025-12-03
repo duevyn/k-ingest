@@ -17,5 +17,6 @@ void get(int bytes);
 void destroy(struct rbuf *buf);
 size_t capac(struct rbuf *buf);
 void readfd_nbl(struct rbuf *buf, int fd, uint16_t count);
+void memcpyrbuf(struct rbuf *buf, uint8_t *src, uint16_t cnt);
 
 #endif
