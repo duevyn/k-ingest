@@ -4,19 +4,18 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define SIZE 100
+#define SIZE 4096
 
 typedef struct rbuf {
 	size_t head, tail, base;
 	uint32_t size, count;
 	uint8_t mem[SIZE];
+	uint8_t *slb;
 } rbuf;
 
-void put();
-void get(int bytes);
-void destroy(struct rbuf *buf);
+void rbufdestroy(struct rbuf *buf);
 size_t capac(struct rbuf *buf);
-void readfd_nbl(struct rbuf *buf, int fd, uint16_t count);
-void memcpyrbuf(struct rbuf *buf, uint8_t *src, uint16_t cnt);
+void *memcpyrng(void *buff, const void *src, size_t cnt);
+struct rbuf *rbufinit();
 
 #endif

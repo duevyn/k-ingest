@@ -1,3 +1,4 @@
+#include "fdcxt.h"
 #include "rbuf.h"
 #include "mempool.h"
 
@@ -48,19 +49,18 @@ void printSocketPort(int sock, struct sockaddr_in *addr)
 	printf("socket fd (%d) listening on %d:%d\n", sock, ip, PORT);
 }
 
-void handleConn(int efd, int sfd, struct epoll_event *ev)
+void hndlcn(int efd, int sfd, struct epoll_event *ev, struct mempool *mp)
 {
 	int conn_fd;
-
 	if ((conn_fd = accept(sfd, NULL, NULL)) == -1) {
 		perror("accept");
 		exit(EXIT_FAILURE);
 	}
+	fprintf(stderr, "Adding new connection: %d\n", conn_fd);
 
-	struct context *cx = cxtinit(conn_fd);
+	struct fdcxt *cx =
+		cxinit(conn_fd, mp, (getmem_fn)palloc, (freemem_fn)pfree);
 
-	printf("Adding a new connection: %d\nspace in buf: %p\n", conn_fd,
-	       cx->buf);
 	setNonBlocking(cx->fd);
 	ev->events = EPOLLIN | EPOLLET;
 	ev->data.ptr = cx;
@@ -70,12 +70,55 @@ void handleConn(int efd, int sfd, struct epoll_event *ev)
 	}
 }
 
+void hndlev(struct mempool *mp, struct rbuf *buf, struct fdcxt *cxt)
+{
+	ssize_t bytes, cmt;
+	cmt = 0;
+
+	fprintf(stderr, "\n\n==========================\nHandling event\n\n");
+	if (cxt->blk == NULL) {
+		cxgetblk(cxt);
+	}
+
+	//TODO: use base as basis for return logic (pun intended)
+	uint16_t base = cxt->tail;
+	while ((bytes = cxreadfd(cxt, BLOCK_SIZE)) > 0) {
+		fprintf(stderr, "hndlev read %lu bytes\n", bytes);
+
+		// can i just use offwr, offrd,
+		// (pend is wr - rd)
+		// (free = BL_SZ - wr + rd)
+		// (cntig = BL_SZ - offwr )
+		procfdcxt(cxt, buf->mem, memcpyrng);
+	}
+
+	if (bytes == 0) {
+		close(cxt->fd);
+		cxfreeblk(cxt);
+		fprintf(stderr, "hndlev: usr closed conn %p\n", cxt->blk);
+		return;
+	} else if (!(errno == EAGAIN || errno == EWOULDBLOCK)) {
+		perror("ERROR reading bytes");
+		close(cxt->fd);
+		cxfreeblk(cxt);
+		return;
+	} else if (cxt->pnd == 0) {
+		fprintf(stderr, "hndlev: read: %d, releasing%p\n",
+			cxt->tail - base, cxt->blk);
+		cxfreeblk(cxt);
+		return;
+	}
+
+	fprintf(stderr,
+		"hndlev: non empty queue when EAGAIN. keeping mem block %p\n",
+		cxt->blk);
+}
+
 void startPolling(int server_fd)
 {
-	struct rbuf buf = { .mem = { 0 } };
+	struct rbuf *buf = rbufinit();
 	struct mempool *mp = mempoolinit();
-	buf.head = buf.tail = 0;
-	printf("buff size %lu, location %p\n", sizeof(buf.mem), buf.mem);
+	printf("buff size %lu, location %p\n", sizeof(buf->mem), buf->mem);
 	struct epoll_event conn_ev, conn_evs[100];
 	int nfds, epollfd, n;
 
@@ -84,7 +127,7 @@ void startPolling(int server_fd)
 		exit(EXIT_FAILURE);
 	}
 
-	struct context cxt = { .fd = server_fd };
+	struct fdcxt cxt = { .fd = server_fd };
 
 	conn_ev.events = EPOLLIN;
 	conn_ev.data.ptr = &cxt;
@@ -103,78 +146,16 @@ void startPolling(int server_fd)
 		}
 
 		for (n = 0; n < nfds; n++) {
-			//int nfd = ((struct context *)conn_evs[n].data.ptr)->fd;
-			//	fprintf(stderr,
-			//		"We in the event loop: n: %d, server_fd %d\n",
-			//		n, server_fd);
-			struct context *cx = conn_evs[n].data.ptr;
-			//int nfd = ((struct context *)conn_evs[n].data.ptr)->fd;
+			struct fdcxt *cx = conn_evs[n].data.ptr;
+			//struct context *cx = conn_evs[n].data.ptr;
 			if (cx->fd == server_fd) {
-				//	fprintf(stderr,
-				//		"startPolling right before handleConn -> cx->buf: %p\n",
-				//		cx->buf);
-				handleConn(epollfd, server_fd, &conn_evs[n]);
+				hndlcn(epollfd, server_fd, &conn_evs[n], mp);
 			} else {
-				//	fprintf(stderr,
-				//		"startPolling about to rreadfd_nbl\n");
-				//readfd_nbl(&buf, cx->fd, 50);
-				hndlev(mp, &buf, cx);
+				hndlev(mp, buf, cx);
 			}
 		}
 	}
 	mpdestroy(mp);
-}
-
-void recvSync(int *fd_socket)
-{
-	ubyte input_buffer[500];
-	ubyte *input_ptr = input_buffer;
-
-	int fd_conn = accept(*fd_socket, NULL, NULL);
-
-	if (fd_conn == -1) {
-		printf("Failure accepting: %d\n", errno);
-		close(*fd_socket);
-		exit(EXIT_FAILURE);
-	}
-
-	ssize_t bytes_wr = read(fd_conn, (ubyte *)input_buffer, 500);
-
-	if (bytes_wr == -1) {
-		printf("Failure receiving: ERROR -> %d\n", errno);
-		_exit(EXIT_FAILURE);
-	} else if (bytes_wr > 0) {
-		// poll stuff
-		printf("we at least got the bytes\n");
-		char hworld[14];
-		memcpy(hworld, input_buffer, 13);
-		hworld[13] = '\0';
-
-		printf("We did catch the bytes: %s\n", hworld);
-		/*
-                char incoming[bytes_wr * sizeof(char) + 1];
-                char *iter = incoming;
-
-                ubyte *c = input_ptr + ((bytes_wr - 1) * sizeof(byte));
-                do {
-                        *iter = *c;
-                        c--;
-                        ++iter;
-                } while (c != input_ptr);
-                *iter = '\0';
-                printf("I got something: %s", incoming);
-                printf("I got something\n");
-                */
-	} else if (shutdown(fd_conn, SHUT_RDWR) == -1) {
-		printf("Failure shutting down\n");
-		close(*fd_socket);
-		close(fd_conn);
-		exit(EXIT_FAILURE);
-	} else {
-		//close(fd_socket);
-		printf("Something happend on client side. idk");
-		close(fd_conn);
-	}
 }
 
 int main(void)
