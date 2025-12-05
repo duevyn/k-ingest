@@ -1,15 +1,23 @@
 #include "rbuf.h"
 #include <string.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/param.h>
 
-//void *memcpyrng(struct rbuf *bf, uint16_t *src, size_t n)
-void *memcpyrng(void *dest, const void *src, size_t n)
+void *memcprng(void *dest, const void *src, size_t n)
 {
 	struct rbuf *buf = (struct rbuf *)dest;
-	memcpy(buf->mem + buf->head, src, n);
-	buf->head += n;
+	size_t len = MIN(SIZE - buf->head, n);
+	memcpy(buf->slb + buf->head, src, len);
+	memcpy(buf->slb, (uint8_t *)src + len, n - len);
+
+	buf->head = (buf->head + n) % SIZE;
 	buf->count += n;
-	return (void *)0;
+	fprintf(stderr, "memcprng hd %lu tl %lu cnt %u, len %lu, addr %p\n",
+		buf->head, buf->tail, buf->count, len, buf);
+	return dest;
 }
 
 struct rbuf *rbufinit()
@@ -29,4 +37,10 @@ void rbufdestroy(struct rbuf *bf)
 	if (bf->slb)
 		munmap(bf, SIZE);
 	free(bf);
+	fprintf(stderr, "DESTROYED RBUF\n");
+}
+
+size_t rbfcapac(struct rbuf *buf)
+{
+	return SIZE - buf->count;
 }

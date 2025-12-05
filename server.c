@@ -58,8 +58,7 @@ void hndlcn(int efd, int sfd, struct epoll_event *ev, struct mempool *mp)
 	}
 	fprintf(stderr, "Adding new connection: %d\n", conn_fd);
 
-	struct fdcxt *cx =
-		cxinit(conn_fd, mp, (getmem_fn)palloc, (freemem_fn)pfree);
+	struct fdcxt *cx = cxinit(conn_fd, mp);
 
 	setNonBlocking(cx->fd);
 	ev->events = EPOLLIN | EPOLLET;
@@ -76,50 +75,39 @@ void hndlev(struct mempool *mp, struct rbuf *buf, struct fdcxt *cxt)
 	cmt = 0;
 
 	fprintf(stderr, "\n\n==========================\nHandling event\n\n");
-	if (cxt->blk == NULL) {
-		cxgetblk(cxt);
-	}
+	if (cxt->blk == NULL)
+		cxgetblk(cxt, mp, palloc);
 
-	//TODO: use base as basis for return logic (pun intended)
-	uint16_t base = cxt->tail;
-	while ((bytes = cxreadfd(cxt, BLOCK_SIZE)) > 0) {
+	while ((bytes = cxreadfd(cxt, MAX_MESSAGE)) > 0) {
 		fprintf(stderr, "hndlev read %lu bytes\n", bytes);
-
-		// can i just use offwr, offrd,
-		// (pend is wr - rd)
-		// (free = BL_SZ - wr + rd)
-		// (cntig = BL_SZ - offwr )
-		procfdcxt(cxt, buf->mem, memcpyrng);
+		/*
+		if (rbfcapac(buf) < bytes) {
+			fprintf(stderr,
+				"ERROR hndlev: buffer overflow. bytes %lu, capac %ld, addr %p\n",
+				bytes, rbfcapac(buf), buf);
+			return;
+		}
+                */
+		procfdcxt(cxt, buf, memcprng);
 	}
 
-	if (bytes == 0) {
-		close(cxt->fd);
-		cxfreeblk(cxt);
-		fprintf(stderr, "hndlev: usr closed conn %p\n", cxt->blk);
-		return;
-	} else if (!(errno == EAGAIN || errno == EWOULDBLOCK)) {
-		perror("ERROR reading bytes");
-		close(cxt->fd);
-		cxfreeblk(cxt);
-		return;
-	} else if (cxt->pnd == 0) {
-		fprintf(stderr, "hndlev: read: %d, releasing%p\n",
-			cxt->tail - base, cxt->blk);
-		cxfreeblk(cxt);
+	if (bytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+		if (cxt->pnd)
+			cxresetblk(cxt);
+		else
+			cxfreeblk(cxt, mp, pfree);
 		return;
 	}
-
-	fprintf(stderr,
-		"hndlev: non empty queue when EAGAIN. keeping mem block %p\n",
-		cxt->blk);
+	cxdestroy(cxt, mp, pfree);
+	close(cxt->fd);
 }
 
 void startPolling(int server_fd)
 {
 	struct rbuf *buf = rbufinit();
-	struct mempool *mp = mempoolinit();
-	printf("buff size %lu, location %p\n", sizeof(buf->mem), buf->mem);
-	struct epoll_event conn_ev, conn_evs[100];
+	struct mempool *mp = mempoolinit(MAX_MESSAGE);
+	printf("buff location %p\n", buf);
+	struct epoll_event conn_ev, conn_evs[POOL_SIZE];
 	int nfds, epollfd, n;
 
 	if ((epollfd = epoll_create1(0)) == -1) {
@@ -137,7 +125,6 @@ void startPolling(int server_fd)
 	}
 
 	for (;;) {
-		//fprintf(stderr, "Do we even start loop\n");
 		signal(SIGINT, intHandler);
 		nfds = epoll_wait(epollfd, conn_evs, MAX_CONNECTIONS, -1);
 		if (nfds == -1) {
@@ -147,7 +134,6 @@ void startPolling(int server_fd)
 
 		for (n = 0; n < nfds; n++) {
 			struct fdcxt *cx = conn_evs[n].data.ptr;
-			//struct context *cx = conn_evs[n].data.ptr;
 			if (cx->fd == server_fd) {
 				hndlcn(epollfd, server_fd, &conn_evs[n], mp);
 			} else {
@@ -155,6 +141,8 @@ void startPolling(int server_fd)
 			}
 		}
 	}
+
+	//TODO: we actually never call this. implement data cleanup
 	mpdestroy(mp);
 }
 

@@ -15,9 +15,12 @@ typedef struct mempool {
 	uint64_t page;
 } mempool;
 
-struct mempool *mempoolinit();
-uint8_t *palloc(struct mempool *mp);
-void pfree(struct mempool *mp, uint8_t *buf);
-void mpdestroy(struct mempool *mp);
+struct mempool *mempoolinit(size_t blksz);
+//uint8_t *palloc(struct mempool *mp);
+void *palloc(void *mpool);
+void pfree(void *mpool, void *buf);
+void mpdestroy(void *mpool);
+//void pfree(struct mempool *mp, uint8_t *buf);
+//void mpdestroy(struct mempool *mp);
 
 #endif
