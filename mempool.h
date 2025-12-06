@@ -12,15 +12,21 @@
 typedef struct mempool {
 	uint8_t *slab;
 	uint8_t *blocks[POOL_SIZE];
-	uint64_t page;
+	uint32_t page;
+	uint32_t sz;
+
+	uint8_t *cxslb;
+	uint8_t **cxblks;
+	uint32_t cxind;
 } mempool;
 
-struct mempool *mempoolinit(size_t blksz);
 //uint8_t *palloc(struct mempool *mp);
-void *palloc(void *mpool);
-void pfree(void *mpool, void *buf);
-void mpdestroy(void *mpool);
-//void pfree(struct mempool *mp, uint8_t *buf);
+struct mempool *mmp_init(size_t blksz, size_t cxsz, size_t cxcnt);
+void *mmp_mallocblk(void *mpool);
+void *mmp_malloccx(void *mpool);
+void mmp_freeblk(void *mpool, void *buf);
+void mmp_freecx(void *mpool, void *buf);
+void mmp_destroy(void *mpool);
 //void mpdestroy(struct mempool *mp);
 
 #endif

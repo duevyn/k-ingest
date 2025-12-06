@@ -2,6 +2,7 @@
 #define FDCXT_H
 #include <stdint.h>
 #include <stdlib.h>
+#include "mempool.h"
 
 #define MAGIC 0xDEADBEEF
 #define MAX_MESSAGE 1024
@@ -34,9 +35,9 @@ typedef struct packet {
 struct fdcxt *cxinit(int fd, void *src);
 int procfdcxt(struct fdcxt *cx, void *dest, memcpy_fn memcopy);
 int cxreadfd(struct fdcxt *cx, size_t n);
-void *cxgetblk(struct fdcxt *cx, void *src, getmem_fn getmem);
-void cxfreeblk(struct fdcxt *cx, void *src, freemem_fn freemem);
-void cxdestroy(struct fdcxt *cx, void *src, freemem_fn freemem);
+void *cxgetblk(struct fdcxt *cx, void *src);
+void cxfreeblk(struct fdcxt *cx, void *src);
+void cxdestroy(struct fdcxt *cx, void *src);
 void cxresetblk(struct fdcxt *cx);
 void cxwrite(struct fdcxt *cx, void *dest, size_t n, memcpy_fn memcopy);
 

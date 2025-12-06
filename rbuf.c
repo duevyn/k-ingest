@@ -15,17 +15,17 @@ void *memcprng(void *dest, const void *src, size_t n)
 
 	buf->head = (buf->head + n) % SIZE;
 	buf->count += n;
-	fprintf(stderr, "memcprng hd %lu tl %lu cnt %u, len %lu, addr %p\n",
-		buf->head, buf->tail, buf->count, len, buf);
+	//fprintf(stderr, "memcprng hd %lu tl %lu cnt %u, len %lu, addr %p\n",
+	//	buf->head, buf->tail, buf->count, len, buf);
 	return dest;
 }
 
 struct rbuf *rbufinit()
 {
-	struct rbuf *bf = (struct rbuf *)malloc(sizeof(*bf));
-	bf->slb = (uint8_t *)mmap(NULL, SIZE, PROT_READ | PROT_WRITE,
-				  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	struct rbuf *bf = mmap(NULL, sizeof(*bf) + SIZE, PROT_READ | PROT_WRITE,
+			       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
+	bf->slb = (uint8_t *)(bf + 1);
 	bf->head = bf->tail = 0;
 	return bf;
 }
@@ -34,9 +34,7 @@ void rbufdestroy(struct rbuf *bf)
 {
 	if (!bf)
 		return;
-	if (bf->slb)
-		munmap(bf, SIZE);
-	free(bf);
+	munmap(bf, SIZE + sizeof(*bf));
 	fprintf(stderr, "DESTROYED RBUF\n");
 }
 

@@ -13,10 +13,11 @@
 #include <signal.h>
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 
 #define FALSE 0
 #define TRUE 1
-#define MAX_CONNECTIONS 50
+#define MAX_CONN 100
 #define PORT 1100
 typedef char byte;
 typedef unsigned char ubyte;
@@ -59,7 +60,6 @@ void hndlcn(int efd, int sfd, struct epoll_event *ev, struct mempool *mp)
 	fprintf(stderr, "Adding new connection: %d\n", conn_fd);
 
 	struct fdcxt *cx = cxinit(conn_fd, mp);
-
 	setNonBlocking(cx->fd);
 	ev->events = EPOLLIN | EPOLLET;
 	ev->data.ptr = cx;
@@ -76,11 +76,11 @@ void hndlev(struct mempool *mp, struct rbuf *buf, struct fdcxt *cxt)
 
 	fprintf(stderr, "\n\n==========================\nHandling event\n\n");
 	if (cxt->blk == NULL)
-		cxgetblk(cxt, mp, palloc);
+		cxgetblk(cxt, mp);
 
 	while ((bytes = cxreadfd(cxt, MAX_MESSAGE)) > 0) {
-		fprintf(stderr, "hndlev read %lu bytes\n", bytes);
 		/*
+		fprintf(stderr, "hndlev read %lu bytes\n", bytes);
 		if (rbfcapac(buf) < bytes) {
 			fprintf(stderr,
 				"ERROR hndlev: buffer overflow. bytes %lu, capac %ld, addr %p\n",
@@ -95,38 +95,30 @@ void hndlev(struct mempool *mp, struct rbuf *buf, struct fdcxt *cxt)
 		if (cxt->pnd)
 			cxresetblk(cxt);
 		else
-			cxfreeblk(cxt, mp, pfree);
+			cxfreeblk(cxt, mp);
 		return;
 	}
-	cxdestroy(cxt, mp, pfree);
+	cxdestroy(cxt, mp);
 	close(cxt->fd);
 }
 
-void startPolling(int server_fd)
+void startPolling(int server_fd, int epollfd, struct epoll_event *conn_evs)
 {
 	struct rbuf *buf = rbufinit();
-	struct mempool *mp = mempoolinit(MAX_MESSAGE);
-	printf("buff location %p\n", buf);
-	struct epoll_event conn_ev, conn_evs[POOL_SIZE];
-	int nfds, epollfd, n;
-
-	if ((epollfd = epoll_create1(0)) == -1) {
-		perror("epoll_create1");
-		exit(EXIT_FAILURE);
-	}
-
-	struct fdcxt cxt = { .fd = server_fd };
-
-	conn_ev.events = EPOLLIN;
-	conn_ev.data.ptr = &cxt;
-	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, server_fd, &conn_ev) == -1) {
-		perror("epoll_ctl: listen_sock (server_fd)");
-		exit(EXIT_FAILURE);
-	}
-
+	struct mempool *mp = mmp_init(MAX_MESSAGE, sizeof(fdcxt), MAX_CONN);
+	fprintf(stderr,
+		"\n\n***********************\nMEMORY\nbuff %p, slab %p, cxslb %p\n",
+		buf, mp->slab, mp->cxslb);
+	fprintf(stderr,
+		"buf.slb -> mp.slab %f (%f),  buf.slb -> mp.cxslb %f,  mp.slab -> mp.cxslb %lu\n",
+		log10((size_t)((ptrdiff_t)(mp->slab - buf->slb))),
+		log((size_t)((ptrdiff_t)(mp->slab - buf->slb))),
+		log((size_t)(ptrdiff_t)(mp->cxslb - buf->slb)),
+		(ptrdiff_t)(mp->cxslb - mp->slab));
+	int nfds, n;
 	for (;;) {
 		signal(SIGINT, intHandler);
-		nfds = epoll_wait(epollfd, conn_evs, MAX_CONNECTIONS, -1);
+		nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, -1);
 		if (nfds == -1) {
 			perror("epoll_wait");
 			exit(EXIT_FAILURE);
@@ -143,10 +135,10 @@ void startPolling(int server_fd)
 	}
 
 	//TODO: we actually never call this. implement data cleanup
-	mpdestroy(mp);
+	mmp_destroy(mp);
 }
 
-int main(void)
+int initsocket()
 {
 	int sockfd =
 		socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
@@ -172,6 +164,27 @@ int main(void)
 		exit(EXIT_FAILURE);
 	}
 
-	startPolling(sockfd);
+	return sockfd;
+}
+
+int main(void)
+{
+	int sockfd = initsocket();
+	int epollfd;
+
+	if ((epollfd = epoll_create1(0)) == -1) {
+		perror("epoll_create1");
+		exit(EXIT_FAILURE);
+	}
+
+	struct epoll_event conn_ev, conn_evs[MAX_CONN];
+	conn_ev.events = EPOLLIN;
+	struct fdcxt cxt = { .fd = sockfd };
+	conn_ev.data.ptr = &cxt;
+	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sockfd, &conn_ev) == -1) {
+		perror("epoll_ctl: listen_sock (server_fd)");
+		exit(EXIT_FAILURE);
+	}
+	startPolling(sockfd, epollfd, conn_evs);
 	exit(EXIT_SUCCESS);
 }

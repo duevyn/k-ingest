@@ -4,44 +4,38 @@
 #include <sys/param.h>
 #include <string.h>
 
-void *cxgetblk(struct fdcxt *cx, void *src, getmem_fn getmem)
+void *cxgetblk(struct fdcxt *cx, void *src)
 //void *cxgetblk(struct fdcxt *cx)
 {
 	if (!cx)
 		return (void *)0;
-	cx->blk = (uint8_t *)getmem(src);
-	//cx->blk = (uint8_t *)cx->getmem(cx->memsrc);
+	cx->blk = (uint8_t *)mmp_mallocblk(src);
 	return cx->blk;
 }
-void cxfreeblk(struct fdcxt *cx, void *src, freemem_fn freemem)
+void cxfreeblk(struct fdcxt *cx, void *src)
 {
 	if (!cx)
 		return;
 
-	freemem(src, cx->blk);
+	mmp_freeblk(src, cx->blk);
 	cx->blk = NULL;
 	cx->head = cx->tail = cx->pnd = 0;
 }
 
-void cxdestroy(struct fdcxt *cx, void *src, freemem_fn freemem)
+void cxdestroy(struct fdcxt *cx, void *src)
 {
 	if (!cx)
 		return;
 	if (cx->blk)
-		cxfreeblk(cx, src, freemem);
-	free(cx);
+		cxfreeblk(cx, src);
+	mmp_freecx(src, cx);
 }
 
 struct fdcxt *cxinit(int fd, void *src)
 {
-	// only way to keep contexts on the stack is to keep them in an array
-	// array has to be size of MAX_FD bc fd range is unpredictable
-	//
-	// TODO: statement above is wrong. we can allocted these in mempool
-	struct fdcxt *cx = (struct fdcxt *)malloc(sizeof(*cx));
+	struct fdcxt *cx = mmp_malloccx(src);
 	cx->fd = fd;
 	cx->blk = NULL;
-	cx->memsrc = src;
 	cx->head = cx->tail = cx->pnd = 0;
 
 	return cx;
@@ -89,7 +83,6 @@ int validpkt(struct fdcxt *cxt)
 	}
 
 	int tot = pckhd.byts + sizeof(packethd);
-	fprintf(stderr, "valdpkt: %d byts\n", tot);
 	return tot;
 }
 
@@ -128,8 +121,8 @@ int procfdcxt(struct fdcxt *cx, void *dest, memcpy_fn memcopy)
 		helloworld(cx, valdbyts);
 		cxwrite(cx, dest, valdbyts, memcopy);
 		totbyts += valdbyts;
-		fprintf(stderr, "cxt offrd %u offwr %u pnd %u\n", cx->tail,
-			cx->head, cx->pnd);
+		//fprintf(stderr, "cxt offrd %u offwr %u pnd %u\n", cx->tail,
+		//cx->head, cx->pnd);
 	};
 
 	return totbyts;
