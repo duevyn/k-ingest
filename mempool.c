@@ -53,6 +53,8 @@ void *mmp_mallocblk(void *mpool)
 	uint8_t *buf = mp->blocks[mp->page--];
 	memset(buf, 0, BLOCK_SIZE);
 	//fprintf(stderr, "mmp_mallocblk addr: %p\n", buf);
+	fprintf(stderr, "malloblk: prv %p, cur: %p\n", buf,
+		mp->blocks[mp->page]);
 	return buf;
 }
 
@@ -66,6 +68,8 @@ void *mmp_malloccx(void *mpool)
 	}
 
 	uint8_t *buf = mp->cxblks[mp->cxind--];
+	fprintf(stderr, "malloccx: prv %p, cur: %p\n", buf,
+		mp->cxblks[mp->cxind]);
 	return buf;
 }
 
@@ -75,6 +79,8 @@ void mmp_freeblk(void *mpool, void *buf)
 	if (!mp || !mp->page || mp->page >= POOL_SIZE - 1)
 		return;
 	mp->blocks[++mp->page] = buf;
+	fprintf(stderr, "freeblk: prv %p, cur: %p\n", mp->blocks[mp->page - 1],
+		buf);
 }
 
 void mmp_freecx(void *mpool, void *buf)
@@ -85,4 +91,6 @@ void mmp_freecx(void *mpool, void *buf)
 	//fprintf(stderr, "cxtfree: fd %d, addr: %p\n", cxt->fd, cxt->buf);
 	uint8_t *prv = mp->cxblks[mp->cxind];
 	mp->cxblks[++mp->cxind] = buf;
+	fprintf(stderr, "freecx: prv %p, cur: %p\n", mp->cxblks[mp->cxind - 1],
+		buf);
 }

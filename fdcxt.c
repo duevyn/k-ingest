@@ -76,6 +76,8 @@ int validpkt(struct fdcxt *cxt)
 	}
 
 	if ((pckhd.byts + sizeof(packethd)) > cxt->pnd) {
+		//TODO: This packet never has to finish. how do we ensure we
+		// get mp->blk back from this cxt
 		fprintf(stderr,
 			"ALERT processcxt:byts avail %u,  byts needed %lu\n",
 			cxt->pnd, pckhd.byts + sizeof(packethd));
@@ -112,10 +114,8 @@ int procfdcxt(struct fdcxt *cx, void *dest, memcpy_fn memcopy)
 	totbyts = valdbyts = 0;
 
 	for (;;) {
-		if ((valdbyts = validpkt(cx)) <= 0) {
-			fprintf(stderr, "proccxt: incmp msg. %d\n", cx->pnd);
+		if ((valdbyts = validpkt(cx)) <= 0)
 			return valdbyts;
-		}
 
 		fprintf(stderr, "\n*****************\n-> Processing Context\n");
 		helloworld(cx, valdbyts);

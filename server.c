@@ -79,6 +79,7 @@ void hndlev(struct mempool *mp, struct rbuf *buf, struct fdcxt *cxt)
 		cxgetblk(cxt, mp);
 
 	while ((bytes = cxreadfd(cxt, MAX_MESSAGE)) > 0) {
+		int res;
 		/*
 		fprintf(stderr, "hndlev read %lu bytes\n", bytes);
 		if (rbfcapac(buf) < bytes) {
@@ -88,18 +89,23 @@ void hndlev(struct mempool *mp, struct rbuf *buf, struct fdcxt *cxt)
 			return;
 		}
                 */
-		procfdcxt(cxt, buf, memcprng);
+		if ((res = procfdcxt(cxt, buf, memcprng)) == -1)
+			goto destroy;
 	}
 
 	if (bytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+		// TODO: How do we know they will come back to release mem
 		if (cxt->pnd)
 			cxresetblk(cxt);
 		else
 			cxfreeblk(cxt, mp);
 		return;
 	}
+
+destroy:
 	cxdestroy(cxt, mp);
 	close(cxt->fd);
+	fprintf(stderr, "closing conn: %d\n", cxt->fd);
 }
 
 void startPolling(int server_fd, int epollfd, struct epoll_event *conn_evs)
