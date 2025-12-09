@@ -9,14 +9,14 @@
 void *memcprng(void *dest, const void *src, size_t n)
 {
 	struct rbuf *buf = (struct rbuf *)dest;
-	size_t len = MIN(SIZE - buf->head, n);
-	memcpy(buf->slb + buf->head, src, len);
+	size_t len = MIN(SIZE - buf->hd, n);
+	memcpy(buf->slb + buf->hd, src, len);
 	memcpy(buf->slb, (uint8_t *)src + len, n - len);
 
-	buf->head = (buf->head + n) % SIZE;
-	buf->count += n;
+	buf->hd = (buf->hd + n) % SIZE;
+	buf->cnt += n;
 	//fprintf(stderr, "memcprng hd %lu tl %lu cnt %u, len %lu, addr %p\n",
-	//	buf->head, buf->tail, buf->count, len, buf);
+	//	buf->hd, buf->tl, buf->cnt, len, buf);
 	return dest;
 }
 
@@ -26,8 +26,17 @@ struct rbuf *rbufinit()
 			       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
 	bf->slb = (uint8_t *)(bf + 1);
-	bf->head = bf->tail = 0;
+	bf->hd = bf->tl = 0;
 	return bf;
+}
+
+void rbf_rdfr(rbuf *buf, uint8_t *dest, size_t n)
+{
+	if (dest) {
+		memcpy(dest, buf, n);
+	}
+
+	buf->tl = (buf->tl + n) % buf->sz;
 }
 
 void rbufdestroy(struct rbuf *bf)
@@ -40,5 +49,5 @@ void rbufdestroy(struct rbuf *bf)
 
 size_t rbfcapac(struct rbuf *buf)
 {
-	return SIZE - buf->count;
+	return SIZE - buf->cnt;
 }

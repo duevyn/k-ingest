@@ -17,7 +17,7 @@ struct mempool *mmp_init(size_t blksz, size_t cxsz, size_t cxcnt)
 
 	mp->page = -1;
 	for (int i = 0; i < POOL_SIZE; i++)
-		mp->blocks[++mp->page] = mp->slab + (i * BLOCK_SIZE);
+		mp->blocks[++mp->page] = mp->slab + (i * blksz);
 
 	mp->cxind = -1;
 	mp->cxblks = malloc(sizeof(size_t) * cxcnt);
