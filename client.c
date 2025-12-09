@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <errno.h>
-#include "packet.h"
+#include "fdcxt.h"
 
 int main()
 {
@@ -31,11 +31,11 @@ int main()
 
 	printf("connected %d:%d\n", sa.sin_addr.s_addr, 1100);
 	size_t sz = sizeof(packethd);
-	char *msg = "\nHello World\n";
+	char *msg = "Hello World from C client\n";
 	struct packethd hd = {
 		.magic = MAGIC,
 		.type = 1,
-		.databytes = strlen(msg),
+		.byts = strlen(msg),
 	};
 
 	struct packet pck = { .head = hd, .data = (uint8_t *)msg };
