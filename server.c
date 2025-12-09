@@ -11,28 +11,18 @@
 #include <fcntl.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/param.h>
+#include <sys/signalfd.h>
 #include <signal.h>
 #include <string.h>
 #include <errno.h>
-#include <math.h>
 
-#define FALSE 0
-#define TRUE 1
 #define MAX_CONN 100
 #define PORT 1100
 typedef char byte;
 typedef unsigned char ubyte;
 
-void intHandler()
-{
-	printf("\nGoodbye!\n");
-	exit(0);
-}
-
-int wrkafka()
-{
-	return 0;
-}
+static volatile sig_atomic_t run = 1;
 
 void setNonBlocking(int fd)
 {
@@ -112,18 +102,22 @@ destroy:
 	close(cxt->fd);
 	fprintf(stderr, "closing conn: %d\n", cxt->fd);
 }
-// main.c
 
-uint8_t *rbf_unwr(struct rbuf *bf, size_t n)
+uint8_t *rbf_unwr(struct rbuf *bf, void *dest, size_t n)
 {
-	packethd hdr;
-	uint8_t *b = malloc(n);
-	memcpy(&hdr, bf, sizeof(struct packethd));
+	if (n <= 0)
+		return 0;
 
-	size_t off = (bf->tl + n) % SIZE;
-	memcpy(b, bf + sizeof(struct packethd), n - off);
-	memcpy(b + n - off, bf, off);
+	uint8_t *b = dest ? dest : malloc(n);
+	size_t len = MIN(bf->sz - bf->tl, n);
+	memcpy(b, bf->slb + bf->tl, len);
+	memcpy(b + len, bf->slb, n - len);
 	return b;
+}
+
+size_t rbf_nfrmwrp(struct rbuf *bf, bool wr)
+{
+	return (wr ? bf->sz - bf->hd : bf->sz - bf->tl);
 }
 
 void drain_rbuf(struct rbuf *buf, struct kafka *kf)
@@ -131,126 +125,46 @@ void drain_rbuf(struct rbuf *buf, struct kafka *kf)
 	packethd hdr;
 
 	// Process all available messages
-	while (buf->tl != buf->hd) {
-		memcpy(&hdr, buf, 0);
-		uint8_t *b = NULL;
-		int rs;
-
-		char *c;
-		b = hdr.byts > (buf->sz - buf->tl) ? rbf_unwr(buf, hdr.byts) :
-						     buf->slb;
-		//if ((rs = kfk_produce(kf, b + sizeof(struct packethd), hdr.byts,
-		//		      c))) {
-		if (1) {
-			fprintf(stderr, "ERR\n");
-			return;
+	fprintf(stderr, "before --> hd %lu, tl %lu\n", buf->hd, buf->tl);
+	while (!rbf_isempty(buf)) {
+		if (rbf_nfrmwrp(buf, 0) < sizeof(struct packethd)) {
+			rbf_unwr(buf, &hdr, sizeof(struct packethd));
+			rbf_rdfr(buf, NULL, sizeof(struct packethd));
+			fprintf(stderr,
+				"?????????????????????? Did i read hdr? %u",
+				hdr.byts);
+		} else {
+			rbf_rdfr(buf, (uint8_t *)&hdr, sizeof(struct packethd));
 		}
+		fprintf(stderr, "after head--> hd %lu, tl %lu\n", buf->hd,
+			buf->tl);
+		rd_kafka_resp_err_t err;
+		uint8_t *b;
+
+		if (rbf_nfrmwrp(buf, 0) < hdr.byts) {
+			uint8_t m[hdr.byts];
+			rbf_unwr(buf, m, hdr.byts);
+			err = kfk_produce(kf, m, hdr.byts, kf->tpc);
+		} else {
+			err = kfk_produce(kf, buf->slb + buf->tl, hdr.byts,
+					  kf->tpc);
+		}
+		//b = hdr.byts > (buf->sz - buf->tl) ? rbf_unwr(buf, hdr.byts) :
+		//				     buf->slb + buf->tl;
+
+		char hello[hdr.byts + 1];
+		hello[hdr.byts] = '\0';
+		if (!b) {
+			b = b ? b : buf->slb + buf->tl;
+		}
+		//memcpy(hello, b, hdr.byts);
+		fprintf(stderr, "bytes: %u, drain buf has string from : %s\n",
+			hdr.byts, hello);
+		rbf_rdfr(buf, NULL, hdr.byts);
 
 		// update tail
-		rbf_rdfr(buf, NULL, hdr.byts);
+		fprintf(stderr, "after --> hd %lu, tl %lu\n", buf->hd, buf->tl);
 	}
-
-	/*
-	while (buf->cnt >= sizeof(packethd)) {
-		// 1. PEEK SIZE (We must do this to know how much to send)
-		// We use peek because we might wrap inside the header itself
-		rbuf_peek(buf, &hdr, sizeof(packethd));
-
-		uint32_t payload_len = hdr.byts;
-		uint32_t total_packet_len = sizeof(packethd) + payload_len;
-
-		// Wait if full packet isn't here yet
-		if (buf->cnt < total_packet_len) {
-			return;
-		}
-
-		// 2. TRY DIRECT POINTER (Optimization)
-		void *direct_ptr = rbuf_get_linear_ptr(buf, total_packet_len);
-
-		if (direct_ptr) {
-			// [CASE A: LINEAR]
-			// Fast path! No scratch buffer.
-			// We strip the header by adding sizeof(packethd) to the pointer.
-
-			int res = kfk_produce(
-				kf, (uint8_t *)direct_ptr + sizeof(packethd),
-				payload_len);
-
-			if (res == 0) {
-				// Success. Manually advance tail since we accessed directly.
-				buf->tail =
-					(buf->tail + total_packet_len) % SIZE;
-				buf->count -= total_packet_len;
-			} else {
-				// Backpressure (Kafka full). Stop draining.
-				return;
-			}
-		} else {
-			// [CASE B: WRAPPED]
-			// Slow path. The message wraps around the end of the buffer.
-			// We MUST linearize it into scratch_pad to send it.
-
-			// Unroll the wrap into scratch
-			rbuf_read(buf, scratch_pad, total_packet_len);
-
-			// Send scratch (Skipping header bytes)
-			int res = kfk_produce(kf,
-					      scratch_pad + sizeof(packethd),
-					      payload_len);
-
-			if (res == -1) {
-				// CRITICAL: We already advanced tail in rbuf_read!
-				// If Kafka fails here, we effectively dropped the packet.
-				// Ideally: Implement a "rollback" or infinite retry here.
-				fprintf(stderr,
-					"Buffer Wrap + Kafka Full = Dropped Packet\n");
-				return;
-			}
-		}
-	}
-        */
-}
-
-void stpoll(int server_fd, int epollfd, struct epoll_event *conn_evs)
-{
-	struct rbuf *buf = rbufinit();
-	struct mempool *mp = mmp_init(MAX_MESSAGE, sizeof(fdcxt), MAX_CONN);
-	fprintf(stderr,
-		"\n\n***********************\nMEMORY\nbuff %p, slab %p, cxslb %p\n",
-		buf, mp->slab, mp->cxslb);
-	fprintf(stderr,
-		"buf.slb -> mp.slab %f (%f),  buf.slb -> mp.cxslb %f,  mp.slab -> mp.cxslb %lu\n",
-		log10((size_t)((ptrdiff_t)(mp->slab - buf->slb))),
-		log((size_t)((ptrdiff_t)(mp->slab - buf->slb))),
-		log((size_t)(ptrdiff_t)(mp->cxslb - buf->slb)),
-		(ptrdiff_t)(mp->cxslb - mp->slab));
-	int nfds, n;
-	for (;;) {
-		signal(SIGINT, intHandler);
-
-		// 2. KAFKA POLL (Callbacks)
-		//kfk_poll(kf);
-
-		// 3. DRAIN RING BUFFER
-		//drain_rbuf(buf, kf);
-		nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, -1);
-		if (nfds == -1) {
-			perror("epoll_wait");
-			exit(EXIT_FAILURE);
-		}
-
-		for (n = 0; n < nfds; n++) {
-			struct fdcxt *cx = conn_evs[n].data.ptr;
-			if (cx->fd == server_fd) {
-				hndlcn(epollfd, server_fd, &conn_evs[n], mp);
-			} else {
-				hndlev(mp, buf, cx);
-			}
-		}
-	}
-
-	//TODO: we actually never call this. implement data cleanup
-	mmp_destroy(mp);
 }
 
 int initsocket()
@@ -282,8 +196,18 @@ int initsocket()
 	return sockfd;
 }
 
-int initepoll(int sfd, fdcxt *cxt)
+int initepoll(int sfd, int *sigfd, fdcxt *cxt)
 {
+	sigset_t mask;
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGINT);
+	sigaddset(&mask, SIGTERM);
+
+	// Block signals in this thread to prevent direct delivery
+	// Need since call to rd_kafka_produceev is async
+	pthread_sigmask(SIG_BLOCK, &mask, NULL);
+
+	*sigfd = signalfd(-1, &mask, 0);
 	int epollfd;
 
 	if ((epollfd = epoll_create1(0)) == -1) {
@@ -291,9 +215,22 @@ int initepoll(int sfd, fdcxt *cxt)
 		exit(EXIT_FAILURE);
 	}
 
+	fdcxt *cxsig = malloc(sizeof(struct fdcxt));
+	cxsig->fd = *sigfd;
+
 	struct epoll_event conn_ev;
 	conn_ev.events = EPOLLIN;
+	conn_ev.data.ptr = cxsig;
+
+	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, *sigfd, &conn_ev) == -1) {
+		perror("epoll_ctl: signalfd ");
+		exit(EXIT_FAILURE);
+	}
+
+	//struct epoll_event conn_ev;
+	conn_ev.events = EPOLLIN;
 	conn_ev.data.ptr = cxt;
+
 	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, sfd, &conn_ev) == -1) {
 		perror("epoll_ctl: listen_sock (server_fd)");
 		exit(EXIT_FAILURE);
@@ -303,53 +240,26 @@ int initepoll(int sfd, fdcxt *cxt)
 
 int main(int argc, char *argv[])
 {
-	if (argc != 3) {
-		fprintf(stderr, "%% Usage: %s <broker> <topic>\n", argv[0]);
-		//return 1;
-	}
+	int sigfd;
 
-	char *brokers;
-	char *topic;
+	struct kafka *kf = NULL;
+	if (argc == 3)
+		kf = kafka_init(argv[1], argv[2]);
+	else
+		fprintf(stderr, "%% Usage: %s <broker> <topic>\n", argv[0]);
 
 	int sockfd = initsocket();
-	//struct fdcxt *cxt = malloc(sizeof(*cxt));
 	struct fdcxt cxt = { .fd = sockfd };
-	int epollfd = initepoll(sockfd, &cxt);
+	int epollfd = initepoll(sockfd, &sigfd, &cxt);
 
 	struct epoll_event conn_evs[MAX_CONN];
 	struct rbuf *buf = rbufinit();
 	struct mempool *mp =
 		mmp_init(MAX_MESSAGE, sizeof(struct fdcxt), MAX_CONN);
-	//struct kafka *kf = kafka_init(NULL, NULL);
-	struct kafka *kf;
-
-	if (argc == 3) {
-		brokers = argv[1];
-		topic = argv[2];
-		kf = kafka_init(brokers, topic);
-		fprintf(stderr, "bro: %s, top %s\n", brokers, topic);
-
-		// testing kafka setup
-		char *payload = "hello world from C";
-		kfk_produce(kf, payload, strlen(payload), kf->tpc);
-		kfk_poll(kf);
-		//cleanup
-		rd_kafka_flush(kf->rk, 10 * 1000);
-		if (rd_kafka_outq_len(kf->rk) > 0)
-			fprintf(stderr, "%% %d message(s) were not delivered\n",
-				rd_kafka_outq_len(kf->rk));
-
-		rd_kafka_destroy(kf->rk);
-		exit(0);
-	}
-	fprintf(stderr, "ERROR, too far\n");
 
 	int nfds, n;
-	for (;;) {
-		signal(SIGINT, intHandler);
-
+	while (run) {
 		// 3. DRAIN RING BUFFER
-		//drain_rbuf(buf, kf);
 		nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, -1);
 		if (nfds == -1) {
 			perror("epoll_wait");
@@ -358,28 +268,29 @@ int main(int argc, char *argv[])
 
 		for (n = 0; n < nfds; n++) {
 			struct fdcxt *cx = conn_evs[n].data.ptr;
-			if (cx->fd == sockfd) {
-				hndlcn(epollfd, sockfd, &conn_evs[n], mp);
-			} else {
-				hndlev(mp, buf, cx);
+			if (cx->fd == sigfd) {
+				fprintf(stderr, "\n\nGoodbye!\n");
+				goto destroy;
 			}
+
+			if (cx->fd == sockfd)
+				hndlcn(epollfd, sockfd, &conn_evs[n], mp);
+			else
+				hndlev(mp, buf, cx);
 		}
 
-		// 2. KAFKA POLL (Callbacks)
-		//kfk_poll(kf);
 		if (kf) {
+			drain_rbuf(buf, kf);
 			kfk_poll(kf);
 		}
 	}
+destroy:
 	if (kf) {
-		rd_kafka_flush(kf->rk, 10 * 1000);
-		if (rd_kafka_outq_len(kf->rk) > 0)
-			fprintf(stderr, "%% %d message(s) were not delivered\n",
-				rd_kafka_outq_len(kf->rk));
-
-		rd_kafka_destroy(kf->rk);
+		kfk_poll(kf);
+		kfk_destroy(kf);
 	}
+	mmp_destroy(mp);
+	rbf_destroy(buf);
 
-	//stpoll(sockfd, epollfd, conn_evs);
 	exit(EXIT_SUCCESS);
 }

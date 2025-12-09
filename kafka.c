@@ -104,8 +104,31 @@ retry:
 
 	if (err) {
 		if (err == RD_KAFKA_RESP_ERR__QUEUE_FULL) {
+			// TODO: decide how to hande full queue
+
 			// BACKPRESSURE SIGNAL
 			// Return -1 to tell Main Loop: "Stop reading from sockets, I am full"
+			//
+			//
+
+			/* If the internal queue is full, wait for
+                        * messages to be delivered and then retry.
+                        * The internal queue represents both
+                        * messages to be sent and messages that have
+                        * been sent or failed, awaiting their
+                        * delivery report callback to be called.
+                        *
+                        * The internal queue is limited by the
+                        * configuration property
+                        * queue.buffering.max.messages and
+                        * queue.buffering.max.kbytes 
+                        *
+                        *
+                        * */
+
+			// rd_kafka_poll(kf->rk, 1000 /*block for max 1000ms*/);
+			// goto retry;
+
 			return -1;
 		}
 
@@ -113,31 +136,28 @@ retry:
 			rd_kafka_err2str(err));
 		return -1; // General error
 	}
-	return 0;
+	return err;
 }
 
 void kfk_poll(struct kafka *kf)
 {
-	/*
 	if (kf && kf->rk) {
 		// Non-blocking poll to trigger callbacks
 		rd_kafka_poll(kf->rk, 0);
 	}
-        */
 }
 
 void kfk_destroy(struct kafka *kf)
 {
-	/*
 	if (kf) {
 		fprintf(stderr, "[Kafka] Flushing messages...\n");
 		// Wait up to 10 seconds for internal queue to drain
-		rd_kafka_flush(kf->rk, 10000);
-
+		rd_kafka_flush(kf->rk, 10 * 1000);
+		if (rd_kafka_outq_len(kf->rk) > 0)
+			fprintf(stderr, "%% %d message(s) were not delivered\n",
+				rd_kafka_outq_len(kf->rk));
 		rd_kafka_destroy(kf->rk);
-		free(kf->rkt);
 		free(kf);
 		fprintf(stderr, "[Kafka] Destroyed.\n");
 	}
-        */
 }
