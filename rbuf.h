@@ -21,5 +21,7 @@ size_t rbf_capac(struct rbuf *buf);
 void *memcprng(void *buff, const void *src, size_t cnt);
 struct rbuf *rbufinit();
 void rbf_rdfr(rbuf *buf, uint8_t *dest, size_t n);
+uint8_t *rbf_unwr(struct rbuf *bf, void *dest, size_t n);
+size_t rbf_nfrmwrp(struct rbuf *bf, bool wr);
 
 #endif

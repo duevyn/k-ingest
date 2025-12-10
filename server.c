@@ -103,21 +103,12 @@ destroy:
 	fprintf(stderr, "closing conn: %d\n", cxt->fd);
 }
 
-uint8_t *rbf_unwr(struct rbuf *bf, void *dest, size_t n)
+void hello(uint8_t *b, size_t n)
 {
-	if (n <= 0)
-		return 0;
-
-	uint8_t *b = dest ? dest : malloc(n);
-	size_t len = MIN(bf->sz - bf->tl, n);
-	memcpy(b, bf->slb + bf->tl, len);
-	memcpy(b + len, bf->slb, n - len);
-	return b;
-}
-
-size_t rbf_nfrmwrp(struct rbuf *bf, bool wr)
-{
-	return (wr ? bf->sz - bf->hd : bf->sz - bf->tl);
+	char hello[n + 1];
+	hello[n] = '\0';
+	memcpy(hello, b, n);
+	fprintf(stderr, "bytes: %lu, drain buf has string: %s\n", n, hello);
 }
 
 void drain_rbuf(struct rbuf *buf, struct kafka *kf)
@@ -130,9 +121,7 @@ void drain_rbuf(struct rbuf *buf, struct kafka *kf)
 		if (rbf_nfrmwrp(buf, 0) < sizeof(struct packethd)) {
 			rbf_unwr(buf, &hdr, sizeof(struct packethd));
 			rbf_rdfr(buf, NULL, sizeof(struct packethd));
-			fprintf(stderr,
-				"?????????????????????? Did i read hdr? %u",
-				hdr.byts);
+			fprintf(stderr, " Did i read hdr? %u", hdr.byts);
 		} else {
 			rbf_rdfr(buf, (uint8_t *)&hdr, sizeof(struct packethd));
 		}
@@ -144,25 +133,15 @@ void drain_rbuf(struct rbuf *buf, struct kafka *kf)
 		if (rbf_nfrmwrp(buf, 0) < hdr.byts) {
 			uint8_t m[hdr.byts];
 			rbf_unwr(buf, m, hdr.byts);
+			hello(m, hdr.byts);
 			err = kfk_produce(kf, m, hdr.byts, kf->tpc);
 		} else {
+			hello(buf->slb + buf->tl, hdr.byts);
 			err = kfk_produce(kf, buf->slb + buf->tl, hdr.byts,
 					  kf->tpc);
 		}
-		//b = hdr.byts > (buf->sz - buf->tl) ? rbf_unwr(buf, hdr.byts) :
-		//				     buf->slb + buf->tl;
 
-		char hello[hdr.byts + 1];
-		hello[hdr.byts] = '\0';
-		if (!b) {
-			b = b ? b : buf->slb + buf->tl;
-		}
-		//memcpy(hello, b, hdr.byts);
-		fprintf(stderr, "bytes: %u, drain buf has string from : %s\n",
-			hdr.byts, hello);
 		rbf_rdfr(buf, NULL, hdr.byts);
-
-		// update tail
 		fprintf(stderr, "after --> hd %lu, tl %lu\n", buf->hd, buf->tl);
 	}
 }
@@ -227,7 +206,6 @@ int initepoll(int sfd, int *sigfd, fdcxt *cxt)
 		exit(EXIT_FAILURE);
 	}
 
-	//struct epoll_event conn_ev;
 	conn_ev.events = EPOLLIN;
 	conn_ev.data.ptr = cxt;
 

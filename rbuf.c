@@ -40,6 +40,23 @@ struct rbuf *rbufinit()
 	return bf;
 }
 
+uint8_t *rbf_unwr(struct rbuf *bf, void *dest, size_t n)
+{
+	if (n <= 0)
+		return 0;
+
+	uint8_t *b = dest ? dest : malloc(n);
+	size_t len = MIN(bf->sz - bf->tl, n);
+	memcpy(b, bf->slb + bf->tl, len);
+	memcpy(b + len, bf->slb, n - len);
+	return b;
+}
+
+size_t rbf_nfrmwrp(struct rbuf *bf, bool wr)
+{
+	return (wr ? bf->sz - bf->hd : bf->sz - bf->tl);
+}
+
 void rbf_rdfr(rbuf *buf, uint8_t *dest, size_t n)
 {
 	if (dest) {
