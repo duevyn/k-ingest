@@ -2,10 +2,13 @@
 #define FDCXT_H
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include "mempool.h"
 
 #define MAGIC 0xDEADBEEF
-#define MAX_MESSAGE 1024
+#define MAX_MESSAGE 4096
+//#define MAX_MESSAGE 2048
+//#define MAX_MESSAGE 16384
 
 typedef void *(*getmem_fn)(void *);
 typedef void (*freemem_fn)(void *, void *);
@@ -17,6 +20,7 @@ typedef struct fdcxt {
 	uint16_t head;
 	uint16_t tail;
 	uint16_t pnd;
+	bool que;
 
 } fdcxt;
 
@@ -33,8 +37,8 @@ typedef struct packet {
 } packet;
 
 struct fdcxt *cxinit(int fd, void *src);
-int procfdcxt(struct fdcxt *cx, void *dest, memcpy_fn memcopy);
-int cxreadfd(struct fdcxt *cx, size_t n);
+ssize_t procfdcxt(struct fdcxt *cx, void *dest, memcpy_fn memcopy);
+ssize_t cxreadfd(struct fdcxt *cx, size_t n);
 void *cxgetblk(struct fdcxt *cx, void *src);
 void cxfreeblk(struct fdcxt *cx, void *src);
 void cxdestroy(struct fdcxt *cx, void *src);

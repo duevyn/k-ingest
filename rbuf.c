@@ -8,11 +8,17 @@
 
 void *memcprng(void *dest, const void *src, size_t n)
 {
+	struct rbuf *buf = (struct rbuf *)dest;
+	if (n > rbf_capac(buf)) {
+		fprintf(stderr,
+			"ERROR memcprng: capac %lu cannot meet req %lu\n",
+			rbf_capac(buf), n);
+		return (void *)NULL;
+	}
 	int stln = n - 8 + 1;
 	char s[stln];
 	s[stln - 1] = '\0';
 	//memcpy(s, ((uint8_t *)src) + 8, n);
-	struct rbuf *buf = (struct rbuf *)dest;
 	size_t sthd = buf->hd + 8;
 	size_t len = MIN(SIZE - buf->hd, n);
 	size_t stlen = MIN(SIZE - sthd, n - 8);
@@ -20,7 +26,7 @@ void *memcprng(void *dest, const void *src, size_t n)
 	memcpy(s, buf->slb + buf->hd + 8, stlen); // for hello
 	memcpy(buf->slb, (uint8_t *)src + len, n - len);
 	memcpy(&s[stlen], buf->slb, n - 8 - stlen); // for hello
-	fprintf(stderr, "memcprng: cp %lu by : %s\n", n, s);
+	//fprintf(stderr, "memcprng: cp %lu by : %s\n", n, s);
 
 	buf->hd = (buf->hd + n) % SIZE;
 	buf->cnt += n;
@@ -33,9 +39,12 @@ struct rbuf *rbufinit()
 {
 	struct rbuf *bf = mmap(NULL, sizeof(*bf) + SIZE, PROT_READ | PROT_WRITE,
 			       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (!bf) {
+		exit(EXIT_FAILURE);
+	}
 
 	bf->slb = (uint8_t *)(bf + 1);
-	bf->hd = bf->tl = 0;
+	bf->hd = bf->tl = bf->cnt = 0;
 	bf->sz = SIZE;
 	return bf;
 }
@@ -43,12 +52,17 @@ struct rbuf *rbufinit()
 uint8_t *rbf_unwr(struct rbuf *bf, void *dest, size_t n)
 {
 	if (n <= 0)
-		return 0;
+		return dest;
 
 	uint8_t *b = dest ? dest : malloc(n);
 	size_t len = MIN(bf->sz - bf->tl, n);
 	memcpy(b, bf->slb + bf->tl, len);
 	memcpy(b + len, bf->slb, n - len);
+	//if (len != n)
+	//	fprintf(stderr,
+	//		"\n\n############## Oh we wrapping hd %lu, tl %lu, cnt %u\n",
+	//		bf->hd, bf->tl, bf->cnt);
+
 	return b;
 }
 
@@ -57,7 +71,7 @@ size_t rbf_nfrmwrp(struct rbuf *bf, bool wr)
 	return (wr ? bf->sz - bf->hd : bf->sz - bf->tl);
 }
 
-void rbf_rdfr(rbuf *buf, uint8_t *dest, size_t n)
+void rbf_rdfr(rbuf *buf, void *dest, size_t n)
 {
 	if (dest) {
 		memcpy(dest, buf->slb + buf->tl, n);

@@ -19,17 +19,18 @@ void dr_msg_cb(rd_kafka_t *rk, const rd_kafka_message_t *rkmessage,
 	if (rkmessage->err)
 		fprintf(stderr, "%% Message delivery failed: %s\n",
 			rd_kafka_err2str(rkmessage->err));
-	else
-		fprintf(stderr,
-			"%% Message delivered (%zd bytes, "
-			"partition %" PRId32 ")\n",
-			rkmessage->len, rkmessage->partition);
+	//else
+	//	fprintf(stderr,
+	//		"%% Message delivered (%zd bytes, "
+	//		"partition %" PRId32 ")\n",
+	//		rkmessage->len, rkmessage->partition);
 
 	/* The rkmessage is destroyed automatically by librdkafka */
 }
 
 int setconf(struct kafka *kf, char *brokers)
 {
+	// TODO: research config options
 	char errstr[512]; /* librdkafka API error reporting buffer */
 	if (rd_kafka_conf_set(kf->conf, "bootstrap.servers", brokers, errstr,
 			      sizeof(errstr)) != RD_KAFKA_CONF_OK) {
@@ -41,10 +42,12 @@ int setconf(struct kafka *kf, char *brokers)
 
 	// Batch Size: 256KB (Default is usually 16KB).
 	// We want to accumulate massive chunks from the Ring Buffer before sending.
+	/*
 	if (rd_kafka_conf_set(kf->conf, "batch.size", "262144", errstr,
 			      sizeof(errstr)) != RD_KAFKA_CONF_OK) {
 		fprintf(stderr, "[Kafka Config] %s\n", errstr);
 	}
+        */
 
 	// Linger: 5ms.
 	// Wait up to 5ms to fill the batch. This trades tiny latency for huge compression wins.
@@ -66,6 +69,16 @@ int setconf(struct kafka *kf, char *brokers)
 	    RD_KAFKA_CONF_OK) {
 		fprintf(stderr, "[Kafka Config] %s\n", errstr);
 	}
+
+	// Set max buffer memory to 512 MB (512000 KB)
+	if (rd_kafka_conf_set(kf->conf, "queue.buffering.max.kbytes",
+			      "10485760", errstr,
+			      sizeof(errstr)) != RD_KAFKA_CONF_OK) {
+		fprintf(stderr,
+			"%% Failed to set queue.buffering.max.kbytes: %s\n",
+			errstr);
+		// Handle error
+	}
 	return 0;
 }
 
@@ -74,7 +87,6 @@ struct kafka *kafka_init(char *brokers, char *topic)
 	struct kafka *kf = malloc(sizeof(*kf));
 	kf->tpc = topic;
 	char errstr[512]; /* librdkafka API error reporting buffer */
-	char buf[512]; /* Message value temporary buffer */
 
 	kf->conf = rd_kafka_conf_new();
 	if (setconf(kf, brokers)) {
@@ -92,6 +104,7 @@ struct kafka *kafka_init(char *brokers, char *topic)
 
 int kfk_produce(struct kafka *kf, const void *pyld, size_t len, char *tp)
 {
+	// TODO: Add compression
 	rd_kafka_resp_err_t err;
 
 retry:
@@ -102,16 +115,16 @@ retry:
 		RD_KAFKA_V_VALUE((void *)pyld, len), RD_KAFKA_V_OPAQUE(NULL),
 		RD_KAFKA_V_END);
 
-	if (err) {
-		if (err == RD_KAFKA_RESP_ERR__QUEUE_FULL) {
-			// TODO: decide how to hande full queue
+	if (err && err == RD_KAFKA_RESP_ERR__QUEUE_FULL) {
+		//if (err == RD_KAFKA_RESP_ERR__QUEUE_FULL) { <--  LEAVE THIS TO TEST FOR BRANCHING
+		// TODO: decide how to hande full queue
 
-			// BACKPRESSURE SIGNAL
-			// Return -1 to tell Main Loop: "Stop reading from sockets, I am full"
-			//
-			//
+		// BACKPRESSURE SIGNAL
+		// Return -1 to tell Main Loop: "Stop reading from sockets, I am full"
+		//
+		//
 
-			/* If the internal queue is full, wait for
+		/* If the internal queue is full, wait for
                         * messages to be delivered and then retry.
                         * The internal queue represents both
                         * messages to be sent and messages that have
@@ -126,16 +139,14 @@ retry:
                         *
                         * */
 
-			// rd_kafka_poll(kf->rk, 1000 /*block for max 1000ms*/);
-			// goto retry;
+		fprintf(stderr,
+			"\n\n\nERROR: RD_KAFKA_RESP_ERR__QUEUE_FULL: retrying\n");
+		rd_kafka_poll(kf->rk, 1000 /*block for max 100ms*/);
+		goto retry;
+	} else if (err)
 
-			return -1;
-		}
-
-		fprintf(stderr, "[Kafka Produce] Failed to enqueue: %s\n",
+		fprintf(stderr, "\n\n\n[Kafka Produce] Failed to enqueue: %s\n",
 			rd_kafka_err2str(err));
-		return -1; // General error
-	}
 	return err;
 }
 

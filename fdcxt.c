@@ -14,7 +14,7 @@ void *cxgetblk(struct fdcxt *cx, void *src)
 }
 void cxfreeblk(struct fdcxt *cx, void *src)
 {
-	if (!cx)
+	if (!cx || !cx->blk)
 		return;
 
 	mmp_freeblk(src, cx->blk);
@@ -28,64 +28,63 @@ void cxdestroy(struct fdcxt *cx, void *src)
 		return;
 	if (cx->blk)
 		cxfreeblk(cx, src);
+	cx->blk = NULL;
+	cx->que = false;
+	cx->fd = -1;
 	mmp_freecx(src, cx);
 }
 
 struct fdcxt *cxinit(int fd, void *src)
 {
 	struct fdcxt *cx = mmp_malloccx(src);
+	//struct fdcxt *cx = malloc(sizeof(*cx));
 	cx->fd = fd;
 	cx->blk = NULL;
 	cx->head = cx->tail = cx->pnd = 0;
+	cx->que = false;
 
 	return cx;
 }
 
-int cxreadfd(struct fdcxt *cx, size_t n)
+ssize_t cxreadfd(struct fdcxt *cx, size_t n)
 {
-	ssize_t byts = read(cx->fd, cx->blk + cx->head, n);
-	if (byts > 0) {
-		cx->head += byts;
-		cx->pnd += byts;
+	size_t locmax = MIN(MAX_MESSAGE, n);
+	size_t len;
+	if (((len = MIN(locmax - cx->head, locmax)) == 0)) {
+		// TODO: this disconn fd if they are full. it should not reach full so maybe this is right.
+		// other option is return 1 to keep them alive and rely on eviction policy when implemented
+		fprintf(stderr,
+			"ALERT cxreadfd: cx buf is full hd %u, tl %u, n %lu, locmax %lu, len %ld \n",
+			cx->head, cx->tail, n, locmax, len);
+		return 0;
 	}
+	if ((cx->pnd + len > MAX_MESSAGE) || (cx->head + len > MAX_MESSAGE)) {
+		fprintf(stderr,
+			"\nERROR. cx buffer overflow: hd %u tl %u pnd %u\n",
+			cx->head, cx->tail, cx->pnd);
+		return -1;
+	}
+	ssize_t byts = read(cx->fd, cx->blk + cx->head, len);
+	cx->head += MAX(0, byts);
+	cx->pnd += MAX(0, byts);
+
+	//bool ovr = (cx->pnd > MAX_MESSAGE) || (cx->head > MAX_MESSAGE);
+	//return ovr ? -1 : byts;
 	return byts;
 }
 
 void cxwrite(struct fdcxt *cx, void *dest, size_t n, memcpy_fn memcopy)
 {
+	if (cx->tail + n > cx->head) {
+		fprintf(stderr,
+			"ALERT: cx cannot write %lu byts. only contain %u\n", n,
+			cx->head - cx->tail);
+		return;
+	}
 	memcopy(dest, cx->blk + cx->tail, n);
 	cx->tail += n;
 	cx->pnd -= n;
-}
-
-int validpkt(struct fdcxt *cxt)
-{
-	if (cxt->pnd < sizeof(packethd)) {
-		//fprintf(stderr, "ALERT processcxt: %u bytes rd\n", cxt->pnd);
-		return 0;
-	}
-
-	struct packethd pckhd;
-	memcpy(&pckhd, cxt->blk + cxt->tail, sizeof(packethd));
-
-	//TODO: we need to close the socket if it fails magic. but we want all
-	// mem management done in hndlev
-	if (pckhd.magic != MAGIC) {
-		fprintf(stderr, "ERROR: processcxt inval magic\n");
-		return -1;
-	}
-
-	if ((pckhd.byts + sizeof(packethd)) > cxt->pnd) {
-		//TODO: This packet never has to finish. how do we ensure we
-		// get mp->blk back from this cxt
-		fprintf(stderr,
-			"ALERT processcxt:byts avail %u,  byts needed %lu\n",
-			cxt->pnd, pckhd.byts + sizeof(packethd));
-		return 0;
-	}
-
-	int tot = pckhd.byts + sizeof(packethd);
-	return tot;
+	cxresetblk(cx);
 }
 
 void helloworld(struct fdcxt *cx, int byts)
@@ -94,37 +93,54 @@ void helloworld(struct fdcxt *cx, int byts)
 	char str[strsz];
 	bzero(str, strsz);
 	memcpy(str, cx->blk + cx->tail + sizeof(packethd), strsz - 1);
-
 	fprintf(stderr, "%s\n", str);
 }
 
 void cxresetblk(struct fdcxt *cx)
 {
-	if (!cx || !cx->pnd)
+	if (!cx)
 		return;
 
-	memmove(cx->blk, cx->blk + cx->tail, cx->pnd);
+	if (cx->pnd > 0)
+		memmove(cx->blk, cx->blk + cx->tail, cx->pnd);
 	cx->tail = 0;
 	cx->head = cx->pnd;
 }
 
-int procfdcxt(struct fdcxt *cx, void *dest, memcpy_fn memcopy)
+ssize_t fdx_validmsgs(struct fdcxt *cx)
 {
-	int totbyts, valdbyts;
-	totbyts = valdbyts = 0;
+	uint32_t it = cx->tail;
 
-	for (;;) {
-		if ((valdbyts = validpkt(cx)) <= 0)
-			return valdbyts;
+	struct packethd hd;
+	while (it < cx->head) {
+		if (!cx->pnd || cx->pnd < sizeof(hd)) {
+			break;
+		}
+		memcpy(&hd, cx->blk + it, sizeof(hd));
 
-		fprintf(stderr, "\n*****************\n-> Processing Context\n");
-		helloworld(cx, valdbyts);
-		cxwrite(cx, dest, valdbyts, memcopy);
-		totbyts += valdbyts;
-		//fprintf(stderr, "cxt offrd %u offwr %u pnd %u\n", cx->tail,
-		//cx->head, cx->pnd);
-	};
+		if (hd.magic != MAGIC) {
+			fprintf(stderr, "ERROR: processcxt inval magic\n");
+			//exit(EXIT_FAILURE);
+			return -1;
+		}
+		if (it + hd.byts + sizeof(hd) > cx->head) {
+			// TODO: this case needs more attention. should only happen if we receive partial message
+			fprintf(stderr,
+				"ALERT: partial message %d tl %u, hd %u, itr %u, hd.bytes %d-- ",
+				cx->fd, cx->tail, cx->head, it, hd.byts);
+			return -1;
+		}
+		it += sizeof(hd) + hd.byts;
+	}
+	return it - cx->tail;
+}
 
-	return totbyts;
-	return 0;
+ssize_t procfdcxt(struct fdcxt *cx, void *dest, memcpy_fn memcopy)
+{
+	ssize_t tot;
+
+	if ((tot = fdx_validmsgs(cx)) <= 0)
+		return tot;
+	cxwrite(cx, dest, tot, memcopy);
+	return tot;
 }

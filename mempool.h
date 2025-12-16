@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 
-#define POOL_SIZE 100
+#define POOL_SIZE 200
 #define BLOCK_SIZE 1024
 //#define BLOCK_SIZE 8192
 //#define BLOCK_SIZE 16384
@@ -27,6 +27,8 @@ void *mmp_malloccx(void *mpool);
 void mmp_freeblk(void *mpool, void *buf);
 void mmp_freecx(void *mpool, void *buf);
 void mmp_destroy(void *mpool);
+void *mmp_pshblk(void *mmpool, void *buf);
+void mmp_popblk(void *mmpool, void *buf);
 //void mpdestroy(struct mempool *mp);
 
 #endif
