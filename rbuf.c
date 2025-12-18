@@ -15,23 +15,23 @@ void *memcprng(void *dest, const void *src, size_t n)
 			rbf_capac(buf), n);
 		return (void *)NULL;
 	}
-	int stln = n - 8 + 1;
-	char s[stln];
-	s[stln - 1] = '\0';
+	//int stln = n - 8 + 1;
+	//char s[stln];
+	//s[stln - 1] = '\0';
 	//memcpy(s, ((uint8_t *)src) + 8, n);
-	size_t sthd = buf->hd + 8;
+	//size_t sthd = buf->hd + 8;
 	size_t len = MIN(SIZE - buf->hd, n);
-	size_t stlen = MIN(SIZE - sthd, n - 8);
+	//size_t stlen = MIN(SIZE - sthd, n - 8);
 	memcpy(buf->slb + buf->hd, src, len);
-	memcpy(s, buf->slb + buf->hd + 8, stlen); // for hello
+	//memcpy(s, buf->slb + buf->hd + 8, stlen); // for hello
 	memcpy(buf->slb, (uint8_t *)src + len, n - len);
-	memcpy(&s[stlen], buf->slb, n - 8 - stlen); // for hello
+	//memcpy(&s[stlen], buf->slb, n - 8 - stlen); // for hello
 	//fprintf(stderr, "memcprng: cp %lu by : %s\n", n, s);
 
 	buf->hd = (buf->hd + n) % SIZE;
 	buf->cnt += n;
 	//fprintf(stderr, "memcprng hd %lu tl %lu cnt %u, len %lu, addr %p\n",
-	//	buf->hd, buf->tl, buf->cnt, len, buf);
+	//	buf->hd, buf->tl, buf->cnt, len, buf->slb + buf->tl);
 	return dest;
 }
 

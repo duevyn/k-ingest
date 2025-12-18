@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <librdkafka/rdkafka.h>
-#include <string.h>
 
 typedef struct kafka {
 	rd_kafka_t *rk; // The Producer Instance

@@ -29,7 +29,7 @@ struct mempool *mmp_init(size_t blksz, size_t cxsz, size_t cxcnt)
 		"blk[0] %p, [1] %p, [99] %p, slb %p\ncxblk[0] %p, [1] %p, [99] %p slb %p\n",
 		mp->blocks[0], mp->blocks[1], mp->blocks[POOL_SIZE - 1],
 		mp->slab, mp->cxblks[0], mp->cxblks[1],
-		mp->cxblks[MAX_CONN - 1], mp->cxslb);
+		mp->cxblks[cxcnt - 1], mp->cxslb);
 	return mp;
 }
 

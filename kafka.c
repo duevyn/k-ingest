@@ -98,6 +98,8 @@ struct kafka *kafka_init(char *brokers, char *topic)
 			errstr);
 		return NULL;
 	}
+	kf->rkt =
+		rd_kafka_topic_new(kf->rk, kf->tpc, rd_kafka_topic_conf_new());
 
 	return kf;
 }
@@ -141,7 +143,7 @@ retry:
 
 		fprintf(stderr,
 			"\n\n\nERROR: RD_KAFKA_RESP_ERR__QUEUE_FULL: retrying\n");
-		rd_kafka_poll(kf->rk, 1000 /*block for max 100ms*/);
+		rd_kafka_poll(kf->rk, 100 /*block for max 1000ms*/);
 		goto retry;
 	} else if (err)
 

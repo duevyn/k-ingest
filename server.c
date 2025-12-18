@@ -28,6 +28,7 @@ typedef unsigned char ubyte;
 
 static volatile sig_atomic_t run = 1;
 
+char *hwstr = "hello world\n";
 void setNonBlocking(int fd)
 {
 	int prev = fcntl(fd, F_GETFL, 0);
@@ -77,43 +78,6 @@ void hello(uint8_t *b, size_t n)
 	//fprintf(stderr, "bytes: %lu, drain buf has string: %s\n", n, hello);
 }
 
-void btchkfk(struct rbuf *bf, struct kafka *kf, mempool *mp)
-{
-	if (!bf || !kf)
-		return;
-
-	size_t frn = bf->hd >= bf->tl ? bf->hd : bf->tl;
-
-	//size_t len = MIN();
-	packethd hd;
-	uint32_t itr = bf->tl;
-	uint32_t ti = 0;
-	rd_kafka_resp_err_t err;
-	size_t tot = 0;
-	if (bf->tl < bf->hd) {
-		uint8_t *b = bf->slb + bf->tl;
-		tot = (intptr_t)(bf->hd - bf->tl);
-		if ((err = kfk_produce(kf, b, hd.byts, kf->tpc) == 0)) {
-			rbf_rdfr(bf, NULL, hd.byts);
-		}
-	}
-	do {
-		rbf_unwr(bf, &hd, sizeof(struct packethd));
-		if (!hd.magic || hd.magic != MAGIC) {
-			fprintf(stderr,
-				"ERROR drain_rbuf: Invalid magic %x, iter %d\nCRITICAL rbuf should never have invalid entries. Store invalidated\n",
-				hd.magic);
-			exit(EXIT_FAILURE);
-		}
-		ti += sizeof(hd) + hd.byts;
-
-	} while (true);
-
-	memset(&hd, 0, sizeof(struct packethd));
-	//rbf_unwr(bf, );
-	//length();
-}
-
 void drain_rbuf(struct rbuf *buf, struct kafka *kf)
 {
 	packethd hdr;
@@ -143,6 +107,73 @@ void drain_rbuf(struct rbuf *buf, struct kafka *kf)
 			free(b);
 		//kfk_poll(kf);
 	}
+}
+
+void drain_rbuf2(struct rbuf *buf, struct kafka *kf)
+{
+	packethd hdr;
+	memset(&hdr, 0, sizeof(struct packethd));
+        size_t rmn, mscnt;
+
+        rmn = MIN(SIZE - rbf_capac(buf), KFK_BTCH);
+        mscnt = 0;
+
+        //struct rd_kafka_message_t msgs[cnt];
+        rd_kafka_message_t msgs[rmn/10];
+
+
+        //fprintf(stderr, "rmn %lu, size %d rbfcapap %lu, buf->cnt %u\n", rmn, SIZE, rbf_capac(buf), buf->cnt);
+        while(rmn > sizeof(hdr) && !rbf_isempty(buf)){
+		rbf_unwr(buf, &hdr, sizeof(struct packethd));
+		if (!hdr.magic || hdr.magic != MAGIC) {
+			fprintf(stderr,
+				"ERROR drain_rbuf: Invalid magic %x\nCRITICAL rbuf should never have invalid entries. Store invalidated\n",
+				hdr.magic);
+			exit(EXIT_FAILURE);
+		}
+		rbf_rdfr(buf, NULL, sizeof(struct packethd));
+		uint8_t *b = buf->slb + buf->tl;
+		//bool clean = false;
+		if ((rbf_nfrmwrp(buf, 0)) < hdr.byts) {
+			b = malloc(hdr.byts);
+			//clean = true;
+			rbf_unwr(buf, b, hdr.byts);
+		}
+                //fprintf(stderr, "before count %lu\n", mscnt);
+                msgs[mscnt++] = (rd_kafka_message_t){
+                        .payload = b,
+                        .len = hdr.byts,
+                        .rkt = kf->rkt
+                };
+                //fprintf(stderr, "after count %lu\n", mscnt);
+
+		// TODO: we lose this message. we currenly advance to keep rbf in sync
+		//kfk_produce(kf, b, hdr.byts, kf->tpc);
+		rbf_rdfr(buf, NULL, hdr.byts);
+
+                rmn -= hdr.byts;
+		//if (clean)
+		//	free(b);
+	}
+        //fprintf(stderr, "count %lu\n", mscnt);
+        if (mscnt){
+                rd_kafka_produce_batch (
+                        kf->rkt, 
+                        RD_KAFKA_PARTITION_UA, 
+	        	RD_KAFKA_MSG_F_COPY,
+                        msgs,
+                        mscnt
+                );
+	        kfk_poll(kf);
+        }
+        /*
+        rd_kafka_produce_batch (
+                rd_kafka_topic_t *rkt, 
+                int32_t partition, 
+                int msgflags, 
+                rd_kafka_message_t *rkmessages, 
+                int message_cnt)
+                */
 }
 
 int initsocket()
@@ -219,26 +250,26 @@ ssize_t hndlev(mempool *mp, rbuf *buf, fdcxt *cxt)
 {
 	if (cxt->blk == NULL)
 		cxgetblk(cxt, mp);
-	ssize_t bytes, tot, cur;
+	ssize_t bytes, cur;
 	bytes = cur = 0;
-	tot = MIN(rbf_capac(buf), MAX_MESSAGE);
 
-	if (rbf_capac(buf) < MAX_MESSAGE * 2)
+	if (rbf_capac(buf) < MAX_MESSAGE)
 		return 0;
 
-	bytes = cxreadfd(cxt, tot);
+	bytes = cxreadfd(cxt, MAX_MESSAGE);
 	procfdcxt(cxt, buf, memcprng);
 
 	if (bytes > 0 ||
 	    (bytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
-		//cxresetblk(cxt);
 		if (cxt->pnd == 0)
 			cxfreeblk(cxt, mp);
+		else
+			cxresetblk(cxt);
 		return MAX(bytes, 1);
 	}
 
 	cxt->que = false;
-	return -1;
+	return bytes;
 }
 
 int main(int argc, char *argv[])
@@ -262,9 +293,11 @@ int main(int argc, char *argv[])
 
 	uint8_t cnncnt = 0;
 	int nfds, n;
+        int to;
 	while (run) {
-		int8_t to = cnncnt ? 0 : -1;
+	        to = (cnncnt > 0) ? 0 : -1;
 		nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, to);
+		//nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, 0);
 		if (nfds == -1) {
 			perror("epoll_wait");
 			exit(EXIT_FAILURE);
@@ -294,14 +327,13 @@ int main(int argc, char *argv[])
 			if ((res = hndlev(mp, buf, tmp[n])) > 0)
 				cnns[ncnt++] = tmp[n];
 			else {
-				shutdown(tmp[n]->fd, SHUT_RDWR);
 				close(tmp[n]->fd);
 				cxdestroy(tmp[n], mp);
 			}
 		}
 		cnncnt = ncnt;
 		if (kf) {
-			drain_rbuf(buf, kf);
+			drain_rbuf2(buf, kf);
 			kfk_poll(kf);
 		}
 	}
@@ -310,8 +342,19 @@ destroy:
 		kfk_poll(kf);
 		kfk_destroy(kf);
 	}
+        for (int i = 0; i < cnncnt; i++){
+                if (!cnns[i]->que){
+                        continue;
+                }
+                fprintf(stderr, "Closing fd %d\n", cnns[i]->fd);
+                shutdown(cnns[i]->fd, SHUT_RDWR);
+                close(cnns[i]->fd);
+        }
 	mmp_destroy(mp);
 	rbf_destroy(buf);
+        close(epollfd);
+        shutdown(sockfd, SHUT_RDWR);
+        close(sockfd);
 
 	fprintf(stdout, "\n\nGoodbye!\n");
 	exit(EXIT_SUCCESS);

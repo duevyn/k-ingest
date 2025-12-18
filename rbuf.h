@@ -6,9 +6,10 @@
 #include <stdbool.h>
 
 //#define SIZE 4096
-//#define SIZE 65536
+#define SIZE 65536
+//#define SIZE 32768
 //#define SIZE 131072
-#define SIZE 5262144
+//#define SIZE 5262144
 //#define SIZE 100
 
 typedef struct rbuf {

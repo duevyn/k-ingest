@@ -50,6 +50,12 @@ ssize_t cxreadfd(struct fdcxt *cx, size_t n)
 {
 	size_t locmax = MIN(MAX_MESSAGE, n);
 	size_t len;
+        if (cx->head + n > MAX_MESSAGE){
+		fprintf(stderr,
+			"\nERROR. cx buffer overflow: hd %u tl %u pnd %u\n",
+			cx->head, cx->tail, cx->pnd);
+		return -1;
+        }
 	if (((len = MIN(locmax - cx->head, locmax)) == 0)) {
 		// TODO: this disconn fd if they are full. it should not reach full so maybe this is right.
 		// other option is return 1 to keep them alive and rely on eviction policy when implemented
@@ -57,12 +63,6 @@ ssize_t cxreadfd(struct fdcxt *cx, size_t n)
 			"ALERT cxreadfd: cx buf is full hd %u, tl %u, n %lu, locmax %lu, len %ld \n",
 			cx->head, cx->tail, n, locmax, len);
 		return 0;
-	}
-	if ((cx->pnd + len > MAX_MESSAGE) || (cx->head + len > MAX_MESSAGE)) {
-		fprintf(stderr,
-			"\nERROR. cx buffer overflow: hd %u tl %u pnd %u\n",
-			cx->head, cx->tail, cx->pnd);
-		return -1;
 	}
 	ssize_t byts = read(cx->fd, cx->blk + cx->head, len);
 	cx->head += MAX(0, byts);
@@ -84,7 +84,6 @@ void cxwrite(struct fdcxt *cx, void *dest, size_t n, memcpy_fn memcopy)
 	memcopy(dest, cx->blk + cx->tail, n);
 	cx->tail += n;
 	cx->pnd -= n;
-	cxresetblk(cx);
 }
 
 void helloworld(struct fdcxt *cx, int byts)
