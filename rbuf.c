@@ -58,10 +58,10 @@ uint8_t *rbf_unwr(struct rbuf *bf, void *dest, size_t n)
 	size_t len = MIN(bf->sz - bf->tl, n);
 	memcpy(b, bf->slb + bf->tl, len);
 	memcpy(b + len, bf->slb, n - len);
-	//if (len != n)
+	//if (bf->tl + n > SIZE)
 	//	fprintf(stderr,
-	//		"\n\n############## Oh we wrapping hd %lu, tl %lu, cnt %u\n",
-	//		bf->hd, bf->tl, bf->cnt);
+	//		"\n\n############## Oh we wrapping hd %lu, tl %lu, cnt %ui, n %lu, len %lu\n",
+	//		bf->hd, bf->tl, bf->cnt, n, len);
 
 	return b;
 }

@@ -10,14 +10,16 @@
 //#define BLOCK_SIZE 8192
 //#define BLOCK_SIZE 16384
 typedef struct mempool {
-	uint8_t *slab;
-	uint8_t *blocks[POOL_SIZE];
 	uint32_t page;
+	uint32_t cxind;
+	uint8_t **cxblks;
+	uint8_t *cxslb;
+
+	uint8_t **blocks;
+	//uint8_t *blocks[POOL_SIZE];
+	uint8_t *slab;
 	uint32_t sz;
 
-	uint8_t *cxslb;
-	uint8_t **cxblks;
-	uint32_t cxind;
 } mempool;
 
 //uint8_t *palloc(struct mempool *mp);

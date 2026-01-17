@@ -113,17 +113,14 @@ void drain_rbuf2(struct rbuf *buf, struct kafka *kf)
 {
 	packethd hdr;
 	memset(&hdr, 0, sizeof(struct packethd));
-        size_t rmn, mscnt;
+	size_t rmn, mscnt;
 
-        rmn = MIN(SIZE - rbf_capac(buf), KFK_BTCH);
-        mscnt = 0;
+	rmn = MIN(SIZE - rbf_capac(buf), KFK_BTCH);
+	mscnt = 0;
 
-        //struct rd_kafka_message_t msgs[cnt];
-        rd_kafka_message_t msgs[rmn/10];
+	rd_kafka_message_t msgs[rmn / 10];
 
-
-        //fprintf(stderr, "rmn %lu, size %d rbfcapap %lu, buf->cnt %u\n", rmn, SIZE, rbf_capac(buf), buf->cnt);
-        while(rmn > sizeof(hdr) && !rbf_isempty(buf)){
+	while (rmn > sizeof(hdr) && !rbf_isempty(buf)) {
 		rbf_unwr(buf, &hdr, sizeof(struct packethd));
 		if (!hdr.magic || hdr.magic != MAGIC) {
 			fprintf(stderr,
@@ -133,47 +130,28 @@ void drain_rbuf2(struct rbuf *buf, struct kafka *kf)
 		}
 		rbf_rdfr(buf, NULL, sizeof(struct packethd));
 		uint8_t *b = buf->slb + buf->tl;
-		//bool clean = false;
+		uint8_t *clean = NULL;
 		if ((rbf_nfrmwrp(buf, 0)) < hdr.byts) {
 			b = malloc(hdr.byts);
-			//clean = true;
+			clean = b;
 			rbf_unwr(buf, b, hdr.byts);
 		}
-                //fprintf(stderr, "before count %lu\n", mscnt);
-                msgs[mscnt++] = (rd_kafka_message_t){
-                        .payload = b,
-                        .len = hdr.byts,
-                        .rkt = kf->rkt
-                };
-                //fprintf(stderr, "after count %lu\n", mscnt);
+		msgs[mscnt++] = (rd_kafka_message_t){
+			.payload = b,
+			.len = hdr.byts,
+			.rkt = kf->rkt,
+			._private = clean,
+		};
 
-		// TODO: we lose this message. we currenly advance to keep rbf in sync
-		//kfk_produce(kf, b, hdr.byts, kf->tpc);
 		rbf_rdfr(buf, NULL, hdr.byts);
 
-                rmn -= hdr.byts;
-		//if (clean)
-		//	free(b);
+		rmn -= hdr.byts;
 	}
-        //fprintf(stderr, "count %lu\n", mscnt);
-        if (mscnt){
-                rd_kafka_produce_batch (
-                        kf->rkt, 
-                        RD_KAFKA_PARTITION_UA, 
-	        	RD_KAFKA_MSG_F_COPY,
-                        msgs,
-                        mscnt
-                );
-	        kfk_poll(kf);
-        }
-        /*
-        rd_kafka_produce_batch (
-                rd_kafka_topic_t *rkt, 
-                int32_t partition, 
-                int msgflags, 
-                rd_kafka_message_t *rkmessages, 
-                int message_cnt)
-                */
+	if (mscnt) {
+		rd_kafka_produce_batch(kf->rkt, RD_KAFKA_PARTITION_UA, 0, msgs,
+				       mscnt);
+		kfk_poll(kf);
+	}
 }
 
 int initsocket()
@@ -250,26 +228,24 @@ ssize_t hndlev(mempool *mp, rbuf *buf, fdcxt *cxt)
 {
 	if (cxt->blk == NULL)
 		cxgetblk(cxt, mp);
-	ssize_t bytes, cur;
-	bytes = cur = 0;
 
-	if (rbf_capac(buf) < MAX_MESSAGE)
+	if (rbf_capac(buf) < MAX_MESSAGE) {
+		fprintf(stderr, "ALERT hndlev: buffer overflow: cpc %lu cnt %u",
+			rbf_capac(buf), buf->cnt);
 		return 0;
-
-	bytes = cxreadfd(cxt, MAX_MESSAGE);
-	procfdcxt(cxt, buf, memcprng);
-
-	if (bytes > 0 ||
-	    (bytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
-		if (cxt->pnd == 0)
-			cxfreeblk(cxt, mp);
-		else
-			cxresetblk(cxt);
-		return MAX(bytes, 1);
 	}
 
-	cxt->que = false;
-	return bytes;
+	int res = cxreadfd(cxt, MAX_MESSAGE);
+	procfdcxt(cxt, buf, memcprng);
+	// TODO: We should not compare compare bytes here. Any change in cx read can lead to unexpected behavior.
+	// we need to check bytes immediately after sys call.
+
+	if (cxt->pnd > 0)
+		cxresetblk(cxt);
+	else
+
+		cxfreeblk(cxt, mp);
+	return res;
 }
 
 int main(int argc, char *argv[])
@@ -293,11 +269,11 @@ int main(int argc, char *argv[])
 
 	uint8_t cnncnt = 0;
 	int nfds, n;
-        int to;
+	//int to;
 	while (run) {
-	        to = (cnncnt > 0) ? 0 : -1;
-		nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, to);
-		//nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, 0);
+		//to = (cnncnt > 0) ? 0 : -1;
+		//nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, to);
+		nfds = epoll_wait(epollfd, conn_evs, MAX_CONN, 0);
 		if (nfds == -1) {
 			perror("epoll_wait");
 			exit(EXIT_FAILURE);
@@ -327,6 +303,7 @@ int main(int argc, char *argv[])
 			if ((res = hndlev(mp, buf, tmp[n])) > 0)
 				cnns[ncnt++] = tmp[n];
 			else {
+				shutdown(tmp[n]->fd, SHUT_RDWR);
 				close(tmp[n]->fd);
 				cxdestroy(tmp[n], mp);
 			}
@@ -342,19 +319,19 @@ destroy:
 		kfk_poll(kf);
 		kfk_destroy(kf);
 	}
-        for (int i = 0; i < cnncnt; i++){
-                if (!cnns[i]->que){
-                        continue;
-                }
-                fprintf(stderr, "Closing fd %d\n", cnns[i]->fd);
-                shutdown(cnns[i]->fd, SHUT_RDWR);
-                close(cnns[i]->fd);
-        }
+	for (int i = 0; i < cnncnt; i++) {
+		if (!cnns[i]->que) {
+			continue;
+		}
+		fprintf(stderr, "Closing fd %d\n", cnns[i]->fd);
+		shutdown(cnns[i]->fd, SHUT_RDWR);
+		close(cnns[i]->fd);
+	}
 	mmp_destroy(mp);
 	rbf_destroy(buf);
-        close(epollfd);
-        shutdown(sockfd, SHUT_RDWR);
-        close(sockfd);
+	close(epollfd);
+	shutdown(sockfd, SHUT_RDWR);
+	close(sockfd);
 
 	fprintf(stdout, "\n\nGoodbye!\n");
 	exit(EXIT_SUCCESS);

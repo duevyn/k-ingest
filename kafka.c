@@ -19,11 +19,16 @@ void dr_msg_cb(rd_kafka_t *rk, const rd_kafka_message_t *rkmessage,
 	if (rkmessage->err)
 		fprintf(stderr, "%% Message delivery failed: %s\n",
 			rd_kafka_err2str(rkmessage->err));
-	//else
-	//	fprintf(stderr,
-	//		"%% Message delivered (%zd bytes, "
-	//		"partition %" PRId32 ")\n",
-	//		rkmessage->len, rkmessage->partition);
+	else{
+                if (rkmessage->_private){
+                        //fprintf(stderr, "done message with a private %p\n", rkmessage->_private);
+                        free(rkmessage->_private);
+                }
+                //fprintf(stderr,
+                //        "%% Message delivered (%zd bytes, "
+                //        "partition %" PRId32 ")\n",
+                //        rkmessage->len, rkmessage->partition);
+        }
 
 	/* The rkmessage is destroyed automatically by librdkafka */
 }
@@ -42,16 +47,14 @@ int setconf(struct kafka *kf, char *brokers)
 
 	// Batch Size: 256KB (Default is usually 16KB).
 	// We want to accumulate massive chunks from the Ring Buffer before sending.
-	/*
-	if (rd_kafka_conf_set(kf->conf, "batch.size", "262144", errstr,
+	if (rd_kafka_conf_set(kf->conf, "batch.size", "62144", errstr,
 			      sizeof(errstr)) != RD_KAFKA_CONF_OK) {
 		fprintf(stderr, "[Kafka Config] %s\n", errstr);
 	}
-        */
 
 	// Linger: 5ms.
 	// Wait up to 5ms to fill the batch. This trades tiny latency for huge compression wins.
-	if (rd_kafka_conf_set(kf->conf, "linger.ms", "5", errstr,
+	if (rd_kafka_conf_set(kf->conf, "linger.ms", "1", errstr,
 			      sizeof(errstr)) != RD_KAFKA_CONF_OK) {
 		fprintf(stderr, "[Kafka Config] %s\n", errstr);
 	}

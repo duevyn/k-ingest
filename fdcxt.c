@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <sys/param.h>
 #include <string.h>
+#include <errno.h>
 
 void *cxgetblk(struct fdcxt *cx, void *src)
 //void *cxgetblk(struct fdcxt *cx)
@@ -49,28 +50,35 @@ struct fdcxt *cxinit(int fd, void *src)
 ssize_t cxreadfd(struct fdcxt *cx, size_t n)
 {
 	size_t locmax = MIN(MAX_MESSAGE, n);
-	size_t len;
-        if (cx->head + n > MAX_MESSAGE){
+	if ((MAX_MESSAGE  == cx->head)) {
+		// TODO: this disconn fd if they are full. it should not reach full so maybe this is right.
+		// other option is return 1 to keep them alive and rely on eviction policy when implemented
+                cx->que = false;
+		fprintf(stderr,
+			"ALERT cxreadfd: cx buf is full hd %u, tl %u, n %lu, locmax %lu\n",
+			cx->head, cx->tail, n, locmax);
+		return 0;
+	}
+	size_t len = locmax - cx->head;
+        if (cx->head + len > MAX_MESSAGE){
+                cx->que = false;
 		fprintf(stderr,
 			"\nERROR. cx buffer overflow: hd %u tl %u pnd %u\n",
 			cx->head, cx->tail, cx->pnd);
 		return -1;
         }
-	if (((len = MIN(locmax - cx->head, locmax)) == 0)) {
-		// TODO: this disconn fd if they are full. it should not reach full so maybe this is right.
-		// other option is return 1 to keep them alive and rely on eviction policy when implemented
-		fprintf(stderr,
-			"ALERT cxreadfd: cx buf is full hd %u, tl %u, n %lu, locmax %lu, len %ld \n",
-			cx->head, cx->tail, n, locmax, len);
-		return 0;
-	}
-	ssize_t byts = read(cx->fd, cx->blk + cx->head, len);
-	cx->head += MAX(0, byts);
-	cx->pnd += MAX(0, byts);
+	ssize_t bytes = read(cx->fd, cx->blk + cx->head, len);
 
-	//bool ovr = (cx->pnd > MAX_MESSAGE) || (cx->head > MAX_MESSAGE);
-	//return ovr ? -1 : byts;
-	return byts;
+
+	if (bytes > 0 ||
+	    (bytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+	        cx->head += MAX(bytes, 0);
+	        cx->pnd += MAX(bytes, 0);
+                return MAX(bytes, 1);
+	} else {
+                cx->que = false;
+                return -1;
+        }
 }
 
 void cxwrite(struct fdcxt *cx, void *dest, size_t n, memcpy_fn memcopy)
@@ -124,10 +132,11 @@ ssize_t fdx_validmsgs(struct fdcxt *cx)
 		}
 		if (it + hd.byts + sizeof(hd) > cx->head) {
 			// TODO: this case needs more attention. should only happen if we receive partial message
-			fprintf(stderr,
-				"ALERT: partial message %d tl %u, hd %u, itr %u, hd.bytes %d-- ",
-				cx->fd, cx->tail, cx->head, it, hd.byts);
-			return -1;
+                        // UPDATE: as suspected, we need to wait to finish this message
+			//fprintf(stderr,
+			//	"ALERT: partial message %d tl %u, hd %u, itr %u, hd.bytes %d-- ",
+			//	cx->fd, cx->tail, cx->head, it, hd.byts);
+			break;
 		}
 		it += sizeof(hd) + hd.byts;
 	}

@@ -1,12 +1,12 @@
 CC      := gcc
 
 # Your sources
-SRCS    := server.c rbuf.c mempool.c fdcxt.c arena.c kafka.c
+SRCS    := server.c rbuf.c mempool.c fdcxt.c kafka.c
 OBJS    := $(SRCS:.c=.o)
 TARGET  := server
 
 # Base flags
-CFLAGS  := -Wall -O2
+CFLAGS  := -Wall -g -O2
 LDFLAGS := -lm
 
 # Pull in pkg-config flags for glib + rdkafka
@@ -23,4 +23,3 @@ $(TARGET): $(OBJS)
 
 clean:
 	rm -f $(OBJS) $(TARGET)
-
